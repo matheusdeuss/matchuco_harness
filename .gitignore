@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secrets
+.env
+
+# Local harness state (sessions, checkpoints) if stored in-repo
+.matchuco/local/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
