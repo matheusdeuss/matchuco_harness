@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from matchuco.agent import Agent
@@ -59,3 +61,27 @@ def test_cli_defaults_and_overrides() -> None:
     assert parse_args([]).provider in ("anthropic", "openai", "ollama", "fake")
     args = parse_args(["--provider", "fake", "--max-steps", "3", "-p", "hi"])
     assert (args.provider, args.max_steps, args.prompt) == ("fake", 3, "hi")
+
+
+def test_parse_reply() -> None:
+    from matchuco.cli import parse_reply
+    from matchuco.permissions import PermissionReply
+
+    assert parse_reply("y", True) == PermissionReply("yes")
+    assert parse_reply("SIM", False) == PermissionReply("yes")
+    assert parse_reply("a", True) == PermissionReply("always")
+    assert parse_reply("a", False) is None  # "always" not on offer -> ask again
+    assert parse_reply("", True) is None  # a stray Enter is never consent
+    assert parse_reply("n", True) == PermissionReply("no")
+    assert parse_reply("use pytest -x", True) == PermissionReply("no", feedback="use pytest -x")
+
+
+def test_mode_command(tmp_path: Path) -> None:
+    from matchuco.cli import handle_command
+
+    agent = Agent(FakeProvider([]), root=tmp_path)
+    assert handle_command(agent, "/mode plan")
+    assert agent.permissions.mode == "plan"
+    handle_command(agent, "/mode nonsense")
+    assert agent.permissions.mode == "plan"
+    assert handle_command(agent, "/exit") is False

@@ -28,7 +28,7 @@ def test_paths_outside_the_workspace_are_rejected(ctx: ToolContext) -> None:
 
 def test_specs_expose_a_json_schema() -> None:
     specs = {spec.name: spec for spec in default_registry().specs}
-    assert set(specs) == {"glob", "grep", "read", "edit", "write", "shell"}
+    assert set(specs) == {"glob", "grep", "read", "edit", "write", "shell", "exit_plan_mode"}
     assert "path" in specs["read"].input_schema["properties"]
     assert specs["read"].input_schema["required"] == ["path"]
     assert all(spec.description for spec in specs.values())

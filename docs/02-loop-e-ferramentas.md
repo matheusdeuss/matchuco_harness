@@ -135,7 +135,8 @@ diferente de zero volta como erro — senão o modelo lê um build quebrado como
 sucesso.
 
 Por enquanto as únicas travas são o timeout e o cap de saída: `shell` roda
-`rm -rf` sem perguntar. A Fase 3 põe isso atrás de modos de permissão.
+`rm -rf` sem perguntar. A Fase 3 põe isso atrás de modos de permissão
+(veja [03-permissoes.md](03-permissoes.md)).
 
 ## Fronteira do workspace
 

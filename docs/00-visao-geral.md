@@ -24,8 +24,8 @@ A harness só oferece as ferramentas e aplica as regras.
 | Conceito (doc do Claude Code) | Fase | Módulo |
 | --- | --- | --- |
 | Modelos (vários, trocáveis) | 1 | `providers/` |
-| Loop agentic + ferramentas | 2 | `agent/`, `tools/` |
-| Modos de permissão | 3 | `permissions/` |
+| Loop agentic + ferramentas | 2 | `agent.py`, `tools/` |
+| Modos de permissão e regras | 3 | `permissions.py`, `config.py` |
 | Janela de contexto, compactação, CLAUDE.md | 4 | `context/` |
 | Sessões JSONL, resume/fork, checkpoints, auto memory | 5 | `sessions/`, `checkpoints/`, `memory/` |
 | Subagents | 6 | `extensions/subagents.py` |

@@ -28,9 +28,11 @@ from matchuco.messages import (
     Message,
     Response,
     StopReason,
+    TextBlock,
     ToolResultBlock,
     Usage,
 )
+from matchuco.permissions import Approver, Mode, PermissionPolicy
 from matchuco.providers.base import (
     Done,
     Provider,
@@ -73,6 +75,23 @@ narrate what you are about to do at length or repeat file contents back.
 
 Workspace root: {root}
 """
+
+# Mode changes are announced inside the next user message rather than by
+# editing the system prompt: the system prompt is part of the cached prefix,
+# and rewriting it on every mode switch would throw the cache away.
+PLAN_MODE_REMINDER = """\
+<system-reminder>
+Plan mode is active. You must not change anything: only read-only tools \
+(glob, grep, read) will run; edits and shell commands are refused. Explore the \
+code, then call exit_plan_mode with a concrete plan (what changes, where, and \
+how you will verify it). The user will approve or reject it.
+</system-reminder>"""
+
+PLAN_MODE_ENDED = """\
+<system-reminder>
+Plan mode has ended. You may edit files and run commands again, subject to \
+the user's permission settings.
+</system-reminder>"""
 
 
 @dataclass(frozen=True)
@@ -118,19 +137,38 @@ class Agent:
         root: Path | None = None,
         system: str = SYSTEM_PROMPT,
         max_steps: int = DEFAULT_MAX_STEPS,
+        permissions: PermissionPolicy | None = None,
+        approver: Approver | None = None,
     ) -> None:
         self.provider = provider
         self.registry = ToolRegistry(list(default_tools() if tools is None else tools))
         self.context = ToolContext(root=root or Path.cwd())
         self.system = system.format(root=self.context.root)
         self.max_steps = max_steps
+        # Secure by default: without an approver, anything that needs one is denied.
+        self.permissions = permissions or PermissionPolicy()
+        self.approver = approver
         self.history: list[Message] = []
         self.usage = Usage()
+        self._announced_mode: Mode = "default"
+
+    def _mode_reminder(self) -> str | None:
+        """The reminder to prepend to the next prompt, if the model's view of the mode is stale."""
+        mode, previous = self.permissions.mode, self._announced_mode
+        self._announced_mode = mode
+        if mode == previous:
+            return None
+        if mode == "plan":
+            return PLAN_MODE_REMINDER
+        if previous == "plan":
+            return PLAN_MODE_ENDED
+        return None
 
     def clear(self) -> None:
         """Forget the conversation. Tool state (files read) goes with it."""
         self.history.clear()
         self.context.files_read.clear()
+        self._announced_mode = "default"  # a fresh conversation has heard nothing yet
 
     async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
         """Answer one user prompt, streaming events until `TurnEnd`.
@@ -139,12 +177,19 @@ class Agent:
         -- the history is repaired before the exception escapes, so the next
         prompt still goes out as a valid request.
         """
-        self.history.append(Message.user(prompt))
+        announced = self._announced_mode
+        message = Message.user(prompt)
+        if reminder := self._mode_reminder():
+            message.content.insert(0, TextBlock(text=reminder))
+        self.history.append(message)
         try:
             async for event in self._loop():
                 yield event
         except BaseException:
             self._repair_history()
+            if not any(m is message for m in self.history):
+                # The prompt was unwound, reminder included: announce again next time.
+                self._announced_mode = announced
             raise
 
     def _repair_history(self) -> None:
@@ -190,9 +235,10 @@ class Agent:
                 return
 
             results: list[ToolResultBlock] = []
+            gate = self.permissions.gate(self.context, self.approver)
             for block in tool_uses:
                 yield ToolStarted(block.id, block.name, block.input)
-                result = await self.registry.execute(block, self.context)
+                result = await self.registry.execute(block, self.context, gate)
                 yield ToolFinished(block.id, block.name, result)
                 results.append(result)
             # Every tool_use must be answered in a single user message, in order,

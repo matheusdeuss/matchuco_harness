@@ -1,8 +1,9 @@
 """The shell tool: run a command and give the model what a human would see.
 
-This is the most powerful tool in the harness and the one with no safety net
-yet -- it will happily run `rm -rf`. Phase 3 puts it behind permission modes;
-until then the only limits are a timeout and an output cap.
+This is the most powerful tool in the harness: it will happily run `rm -rf`.
+The tool itself only enforces a timeout and an output cap; whether a command
+may run at all is decided before it gets here, by the permission gate
+(`permissions.py`), which matches the command against allow/ask/deny rules.
 
 Two details that matter for an agent, less so for a human:
 
@@ -47,6 +48,14 @@ class ShellTool(Tool[ShellInput]):
         "never run something that waits for input or never exits."
     )
     input_model = ShellInput
+    kind = "execute"
+
+    def permission_subject(self, args: ShellInput, ctx: ToolContext) -> str:
+        return args.command
+
+    def preview(self, args: ShellInput, ctx: ToolContext) -> str:
+        where = f"\n(in {ctx.subject(args.cwd)})" if args.cwd else ""
+        return f"$ {args.command}{where}"
 
     async def run(self, args: ShellInput, ctx: ToolContext) -> str:
         cwd = ctx.resolve(args.cwd) if args.cwd else ctx.root

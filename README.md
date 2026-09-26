@@ -16,7 +16,7 @@ hooks, skills, MCP and evals.
 | 0 | Project setup (uv, ruff, mypy, pytest, CI) | ✅ |
 | 1 | Provider abstraction: Anthropic, OpenAI-compatible (OpenAI, Ollama, ...), fake | ✅ |
 | 2 | Agentic loop + core tools (read, write, edit, glob, grep, shell) | ✅ |
-| 3 | Permissions and modes (manual, accept-edits, plan) | ⏳ |
+| 3 | Permissions: modes (default, accept_edits, plan, bypass) and allow/ask/deny rules | ✅ |
 | 4 | Context engineering: CLAUDE.md/AGENTS.md, token tracking, compaction, caching | ⏳ |
 | 5 | Sessions (JSONL), resume/fork, checkpoints + rewind, auto memory | ⏳ |
 | 6 | Subagents | ⏳ |
@@ -33,7 +33,9 @@ flowchart LR
     P --> A[Anthropic SDK]
     P --> O[OpenAI-compatible<br/>OpenAI · Ollama · LM Studio]
     P --> F[Fake provider<br/>for tests]
-    L -->|tool_use| T[Tool registry]
+    L -->|tool_use| G{Permission gate}
+    G -->|allow / user said yes| T[Tool registry]
+    G -->|deny / user said no| L
     T -->|tool_result| L
 ```
 
@@ -64,11 +66,47 @@ model can read it and try something else.
 | `edit` | replace an exact, unique string |
 | `write` | write a whole file |
 | `shell` | run a command, merged stdout/stderr + exit code |
+| `exit_plan_mode` | hand a finished plan to the user for approval |
 
 Each tool declares a pydantic model for its input, so the JSON Schema the model
 sees and the runtime validation come from one source. `write` and `edit`
 refuse to touch a file that has not been read this session, and every path is
 resolved inside the workspace root.
+
+### Permissions
+
+Every tool call passes a gate ([`permissions.py`](src/matchuco/permissions.py))
+between argument validation and execution. The decision combines the session
+**mode**, **rules** from settings, and the tool's **kind** (read / edit /
+execute / plan):
+
+| Mode | Reads | File edits | Commands |
+| --- | --- | --- | --- |
+| `default` | allowed | ask | ask |
+| `accept_edits` | allowed | allowed | ask |
+| `plan` | allowed | denied | denied |
+| `bypass` | allowed | allowed | allowed |
+
+```json
+// .matchuco/settings.json (project) — also ~/.matchuco/ (user) and settings.local.json
+{
+  "permissions": {
+    "allow": ["shell(uv run pytest *)", "edit(docs/**)"],
+    "ask":   ["shell(git push *)"],
+    "deny":  ["read(.env)", "shell(rm *)"]
+  }
+}
+```
+
+Deny rules win over everything, including `bypass`. Shell rules are matched
+per sub-command, so `git status && rm -rf ~` does not ride on an allow rule
+for `git *`, and commands with substitutions or redirections are never
+auto-approved. A denial is returned to the model as an error `tool_result` —
+with the user's instructions if they typed any — so it can change course.
+
+In **plan mode** the model can only read; it proposes a plan through
+`exit_plan_mode`, and approving it switches the session back to editing.
+Shift+Tab cycles modes in the REPL.
 
 ## Quickstart
 
@@ -82,6 +120,7 @@ uv run matchuco --provider openai        # gpt-5.4-mini by default
 uv run matchuco --provider ollama --model qwen3-coder   # local, free
 uv run matchuco --provider fake -p "hi"  # no API key needed
 uv run matchuco --cwd ../other-repo      # point the tools at another workspace
+uv run matchuco --mode plan              # read-only: explore, then propose a plan
 ```
 
 ## Development

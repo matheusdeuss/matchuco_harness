@@ -16,8 +16,8 @@ htmlcov/
 # Secrets
 .env
 
-# Local harness state (sessions, checkpoints) if stored in-repo
-.matchuco/local/
+# Personal, per-project harness settings (e.g. "always allow" answers)
+.matchuco/settings.local.json
 
 # Editors / OS
 .vscode/

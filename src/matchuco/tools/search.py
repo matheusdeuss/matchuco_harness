@@ -57,6 +57,10 @@ class GlobTool(Tool[GlobInput]):
         "Skips .git, node_modules and other generated directories."
     )
     input_model = GlobInput
+    kind = "read"
+
+    def permission_subject(self, args: GlobInput, ctx: ToolContext) -> str:
+        return ctx.subject(args.path)
 
     async def run(self, args: GlobInput, ctx: ToolContext) -> str:
         root = ctx.resolve(args.path)
@@ -98,6 +102,10 @@ class GrepTool(Tool[GrepInput]):
         "are skipped. Use this to find code before reading whole files."
     )
     input_model = GrepInput
+    kind = "read"
+
+    def permission_subject(self, args: GrepInput, ctx: ToolContext) -> str:
+        return ctx.subject(args.path)
 
     async def run(self, args: GrepInput, ctx: ToolContext) -> str:
         target = ctx.resolve(args.path)

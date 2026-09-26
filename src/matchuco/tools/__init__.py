@@ -5,18 +5,23 @@ from __future__ import annotations
 from typing import Any
 
 from matchuco.tools.base import (
+    Gate,
     Tool,
     ToolContext,
     ToolError,
+    ToolKind,
     ToolRegistry,
     truncate,
 )
 from matchuco.tools.files import EditTool, ReadTool, WriteTool
+from matchuco.tools.plan import ExitPlanModeTool
 from matchuco.tools.search import GlobTool, GrepTool
 from matchuco.tools.shell import ShellTool
 
 __all__ = [
     "EditTool",
+    "ExitPlanModeTool",
+    "Gate",
     "GlobTool",
     "GrepTool",
     "ReadTool",
@@ -24,6 +29,7 @@ __all__ = [
     "Tool",
     "ToolContext",
     "ToolError",
+    "ToolKind",
     "ToolRegistry",
     "WriteTool",
     "default_registry",
@@ -38,7 +44,15 @@ def default_tools() -> list[Tool[Any]]:
     Search before read before write is deliberate: tool order is a weak hint,
     and the cheap, safe tools should be the ones that come to mind first.
     """
-    return [GlobTool(), GrepTool(), ReadTool(), EditTool(), WriteTool(), ShellTool()]
+    return [
+        GlobTool(),
+        GrepTool(),
+        ReadTool(),
+        EditTool(),
+        WriteTool(),
+        ShellTool(),
+        ExitPlanModeTool(),
+    ]
 
 
 def default_registry() -> ToolRegistry:

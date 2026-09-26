@@ -12,6 +12,7 @@ The interesting design is not the I/O, it is the guard rails:
 
 from __future__ import annotations
 
+import difflib
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -21,6 +22,8 @@ from matchuco.tools.base import Tool, ToolContext, ToolError
 MAX_READ_LINES = 2000
 MAX_LINE_LENGTH = 2000
 MAX_FILE_BYTES = 10 * 1024 * 1024
+PREVIEW_LINES = 40
+PREVIEW_DIFF_LINES = 80
 
 
 class ReadInput(BaseModel):
@@ -39,6 +42,10 @@ class ReadTool(Tool[ReadInput]):
         "You must read a file before writing or editing it."
     )
     input_model = ReadInput
+    kind = "read"
+
+    def permission_subject(self, args: ReadInput, ctx: ToolContext) -> str:
+        return ctx.subject(args.path)
 
     async def run(self, args: ReadInput, ctx: ToolContext) -> str:
         path = ctx.resolve(args.path)
@@ -83,6 +90,26 @@ class WriteTool(Tool[WriteInput]):
         "so read it first if it already exists. Prefer `edit` for changes to existing files."
     )
     input_model = WriteInput
+    kind = "edit"
+
+    def permission_subject(self, args: WriteInput, ctx: ToolContext) -> str:
+        return ctx.subject(args.path)
+
+    def preview(self, args: WriteInput, ctx: ToolContext) -> str:
+        name = ctx.subject(args.path)
+        try:
+            path = ctx.resolve(args.path)
+            old = path.read_text(encoding="utf-8") if path.is_file() else None
+        except (ToolError, OSError, UnicodeDecodeError):
+            old = None
+        if old is None:
+            lines = args.content.splitlines()
+            head = "\n".join(lines[:PREVIEW_LINES])
+            more = (
+                f"\n... +{len(lines) - PREVIEW_LINES} lines" if len(lines) > PREVIEW_LINES else ""
+            )
+            return f"new file {name}\n\n{head}{more}"
+        return unified_diff(old, args.content, name)
 
     async def run(self, args: WriteInput, ctx: ToolContext) -> str:
         path = ctx.resolve(args.path)
@@ -116,6 +143,14 @@ class EditTool(Tool[EditInput]):
         "unless `replace_all` is set. Read the file first."
     )
     input_model = EditInput
+    kind = "edit"
+
+    def permission_subject(self, args: EditInput, ctx: ToolContext) -> str:
+        return ctx.subject(args.path)
+
+    def preview(self, args: EditInput, ctx: ToolContext) -> str:
+        note = " (every occurrence)" if args.replace_all else ""
+        return unified_diff(args.old_string, args.new_string, ctx.subject(args.path) + note)
 
     async def run(self, args: EditInput, ctx: ToolContext) -> str:
         path = ctx.resolve(args.path)
@@ -142,6 +177,18 @@ class EditTool(Tool[EditInput]):
         ctx.mark_read(path)
         where = f"{count} occurrences" if count > 1 else "1 occurrence"
         return f"edited {ctx.display(path)} ({where} replaced)"
+
+
+def unified_diff(old: str, new: str, name: str) -> str:
+    """A unified diff for approval prompts, capped so a huge rewrite stays readable."""
+    diff = list(
+        difflib.unified_diff(
+            old.splitlines(), new.splitlines(), f"a/{name}", f"b/{name}", lineterm=""
+        )
+    )
+    if len(diff) > PREVIEW_DIFF_LINES:
+        diff = [*diff[:PREVIEW_DIFF_LINES], f"... +{len(diff) - PREVIEW_DIFF_LINES} diff lines"]
+    return "\n".join(diff) or f"(no textual change to {name})"
 
 
 def is_binary(path: Path) -> bool:
