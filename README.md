@@ -15,7 +15,7 @@ hooks, skills, MCP and evals.
 | --- | --- | --- |
 | 0 | Project setup (uv, ruff, mypy, pytest, CI) | ✅ |
 | 1 | Provider abstraction: Anthropic, OpenAI-compatible (OpenAI, Ollama, ...), fake | ✅ |
-| 2 | Agentic loop + core tools (read, write, edit, glob, grep, shell) | ⏳ |
+| 2 | Agentic loop + core tools (read, write, edit, glob, grep, shell) | ✅ |
 | 3 | Permissions and modes (manual, accept-edits, plan) | ⏳ |
 | 4 | Context engineering: CLAUDE.md/AGENTS.md, token tracking, compaction, caching | ⏳ |
 | 5 | Sessions (JSONL), resume/fork, checkpoints + rewind, auto memory | ⏳ |
@@ -33,7 +33,8 @@ flowchart LR
     P --> A[Anthropic SDK]
     P --> O[OpenAI-compatible<br/>OpenAI · Ollama · LM Studio]
     P --> F[Fake provider<br/>for tests]
-    L --> T[Tools]
+    L -->|tool_use| T[Tool registry]
+    T -->|tool_result| L
 ```
 
 The whole harness works on **provider-neutral types**
@@ -42,6 +43,33 @@ The whole harness works on **provider-neutral types**
 provider adapter translates to and from its wire format and streams back
 `TextDelta` / `ThinkingDelta` / `ToolUseStart` events, ending with `Done`.
 
+### The agent loop
+
+One prompt can take many model turns. [`agent.py`](src/matchuco/agent.py)
+sends the conversation plus the tool schemas, runs whatever tools the model
+asks for, feeds the results back, and repeats until the model answers without
+calling a tool — bounded by `--max-steps`.
+
+A tool that fails is **not** an exception: bad arguments, a missing file or a
+non-zero exit code all come back as a `tool_result` marked as an error, so the
+model can read it and try something else.
+
+### Tools
+
+| Tool | What it does |
+| --- | --- |
+| `glob` | find files by name pattern, newest first |
+| `grep` | regex search inside files |
+| `read` | read a file with line numbers, paged |
+| `edit` | replace an exact, unique string |
+| `write` | write a whole file |
+| `shell` | run a command, merged stdout/stderr + exit code |
+
+Each tool declares a pydantic model for its input, so the JSON Schema the model
+sees and the runtime validation come from one source. `write` and `edit`
+refuse to touch a file that has not been read this session, and every path is
+resolved inside the workspace root.
+
 ## Quickstart
 
 Requires [uv](https://docs.astral.sh/uv/).
@@ -49,10 +77,11 @@ Requires [uv](https://docs.astral.sh/uv/).
 ```bash
 uv sync
 cp .env.example .env   # add ANTHROPIC_API_KEY and/or OPENAI_API_KEY
-uv run matchuco                         # interactive chat (default: anthropic)
-uv run matchuco --provider openai       # gpt-5.4-mini by default
+uv run matchuco                          # interactive agent (default: anthropic)
+uv run matchuco --provider openai        # gpt-5.4-mini by default
 uv run matchuco --provider ollama --model qwen3-coder   # local, free
-uv run matchuco --provider fake -p "hi" # no API key needed
+uv run matchuco --provider fake -p "hi"  # no API key needed
+uv run matchuco --cwd ../other-repo      # point the tools at another workspace
 ```
 
 ## Development

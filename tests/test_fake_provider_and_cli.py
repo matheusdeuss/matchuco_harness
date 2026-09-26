@@ -1,6 +1,7 @@
 import pytest
 
-from matchuco.cli import one_shot, run_turn
+from matchuco.agent import Agent
+from matchuco.cli import _format_args, one_shot, parse_args, run_turn
 from matchuco.messages import Message, ToolUseBlock
 from matchuco.providers import Done, ProviderError, TextDelta, ToolUseStart, complete
 from matchuco.providers.fake import FakeProvider
@@ -29,19 +30,32 @@ async def test_fake_script_exhausted() -> None:
         await complete(FakeProvider([]), "", [])
 
 
-async def test_run_turn_appends_assistant_message() -> None:
+async def test_run_turn_keeps_multi_turn_memory() -> None:
     provider = FakeProvider(["first", "second"])
-    history = [Message.user("one")]
-    await run_turn(provider, history)
-    history.append(Message.user("two"))
-    await run_turn(provider, history)
+    agent = Agent(provider)
+    await run_turn(agent, "one")
+    await run_turn(agent, "two")
 
-    assert [m.role for m in history] == ["user", "assistant", "user", "assistant"]
-    assert history[-1].text == "second"
+    assert [m.role for m in agent.history] == ["user", "assistant", "user", "assistant"]
+    assert agent.history[-1].text == "second"
     # The provider saw the full history on the second call (multi-turn memory).
     assert [m.text for m in provider.requests[1].messages] == ["one", "first", "two"]
 
 
 async def test_one_shot_reports_errors() -> None:
-    assert await one_shot(FakeProvider(["ok"]), "hi") == 0
-    assert await one_shot(FakeProvider([]), "hi") == 1
+    assert await one_shot(Agent(FakeProvider(["ok"])), "hi") == 0
+    assert await one_shot(Agent(FakeProvider([])), "hi") == 1
+
+
+def test_format_args_stays_on_one_short_line() -> None:
+    line = _format_args({"path": "a.py", "content": "x" * 200, "replace_all": True})
+    assert "\n" not in line
+    assert line.startswith("path=a.py ")
+    assert "..." in line
+    assert "replace_all=true" in line
+
+
+def test_cli_defaults_and_overrides() -> None:
+    assert parse_args([]).provider in ("anthropic", "openai", "ollama", "fake")
+    args = parse_args(["--provider", "fake", "--max-steps", "3", "-p", "hi"])
+    assert (args.provider, args.max_steps, args.prompt) == ("fake", 3, "hi")
