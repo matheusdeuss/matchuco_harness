@@ -19,7 +19,7 @@ hooks, skills, MCP and evals.
 | 1 | Provider abstraction: Anthropic, OpenAI-compatible (OpenAI, Ollama, ...), fake | ✅ |
 | 2 | Agentic loop + core tools (read, write, edit, glob, grep, shell) | ✅ |
 | 3 | Permissions: modes (default, accept_edits, plan, bypass) and allow/ask/deny rules | ✅ |
-| 4 | Context engineering: CLAUDE.md/AGENTS.md, token tracking, compaction, caching | ⏳ |
+| 4 | Context engineering: AGENTS.md/CLAUDE.md, environment, token tracking, compaction | ✅ |
 | 5 | Sessions (JSONL), resume/fork, checkpoints + rewind, auto memory | ⏳ |
 | 6 | Subagents | ⏳ |
 | 7 | Hooks and skills | ⏳ |
@@ -110,6 +110,25 @@ In **plan mode** the model can only read; it proposes a plan through
 `exit_plan_mode`, and approving it switches the session back to editing.
 Shift+Tab cycles modes in the REPL.
 
+### Context engineering
+
+[`context.py`](src/matchuco/context.py) assembles the system prompt once per
+session — base prompt, an environment snapshot (OS, the shell the `shell`
+tool really uses, git branch and status) and `AGENTS.md` / `CLAUDE.md` files
+from the user dir, the repo root down to the workspace, and `AGENTS.local.md`
+— and then freezes it. The history is **append-only**: anything that changes
+mid-session is appended, never edited in, which keeps the provider's prompt
+cache warm and keeps reasoning blocks valid on models that bind them to the
+exact prefix.
+
+Context usage is measured from the provider-reported size of the last request
+plus an estimate (~4 chars/token) of what was appended since. At 80% of the
+window the conversation is **compacted**: the model summarizes it and the
+summary replaces the whole history (no verbatim tail, never mid tool round),
+with a guard against compaction thrashing. `/context` shows the breakdown,
+`/compact [focus]` compacts on demand, and a `## Compact Instructions`
+section in `AGENTS.md` tells the summarizer what to keep.
+
 ## Quickstart
 
 Requires [uv](https://docs.astral.sh/uv/).
@@ -123,6 +142,7 @@ uv run matchuco --provider ollama --model qwen3-coder   # local, free
 uv run matchuco --provider fake -p "hi"  # no API key needed
 uv run matchuco --cwd ../other-repo      # point the tools at another workspace
 uv run matchuco --mode plan              # read-only: explore, then propose a plan
+uv run matchuco --context-window 20000   # a small window, to watch compaction happen
 ```
 
 ## Development
@@ -163,7 +183,7 @@ subagents, hooks, skills, MCP e evals.
 | 1 | Abstração de provedores: Anthropic, compatíveis com OpenAI (OpenAI, Ollama...), fake | ✅ |
 | 2 | Loop agentic + ferramentas (read, write, edit, glob, grep, shell) | ✅ |
 | 3 | Permissões: modos (default, accept_edits, plan, bypass) e regras allow/ask/deny | ✅ |
-| 4 | Context engineering: CLAUDE.md/AGENTS.md, contagem de tokens, compactação, cache | ⏳ |
+| 4 | Context engineering: AGENTS.md/CLAUDE.md, ambiente, contagem de tokens, compactação | ✅ |
 | 5 | Sessões (JSONL), resume/fork, checkpoints + rewind, auto memory | ⏳ |
 | 6 | Subagents | ⏳ |
 | 7 | Hooks e skills | ⏳ |
@@ -185,6 +205,13 @@ subagents, hooks, skills, MCP e evals.
   `settings.json` e o **tipo** da ferramenta. Regras `deny` vencem tudo;
   comandos compostos são avaliados por subcomando; no plan mode o modelo só lê
   e apresenta um plano via `exit_plan_mode`.
+- **Contexto** ([`context.py`](src/matchuco/context.py)): o system prompt é
+  montado uma vez por sessão (prompt base, snapshot do ambiente e arquivos
+  `AGENTS.md`/`CLAUDE.md`) e congelado; o histórico é *append-only*, o que
+  mantém o prompt cache aquecido. O uso do contexto vem do tamanho reportado
+  pelo provedor mais uma estimativa do que entrou depois; a 80% da janela a
+  conversa é **compactada** num resumo. `/context` mostra a ocupação e
+  `/compact [foco]` compacta sob demanda.
 
 ### Início rápido
 
@@ -198,6 +225,7 @@ uv run matchuco --provider openai        # gpt-5.4-mini por padrão
 uv run matchuco --provider ollama --model qwen3-coder   # local, grátis
 uv run matchuco --provider fake -p "oi"  # sem chave de API
 uv run matchuco --mode plan              # só leitura: explora e propõe um plano
+uv run matchuco --context-window 20000   # janela pequena, para ver a compactação
 ```
 
 ### Desenvolvimento

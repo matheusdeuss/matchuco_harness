@@ -38,8 +38,14 @@ class FakeRequest:
 class FakeProvider:
     name = "fake"
 
-    def __init__(self, script: Sequence[Message | str] = (), model: str = "fake-model") -> None:
+    def __init__(
+        self,
+        script: Sequence[Message | str] = (),
+        model: str = "fake-model",
+        context_window: int = 200_000,
+    ) -> None:
         self.model = model
+        self.context_window = context_window
         self._script = [
             Message(role="assistant", content=[TextBlock(text=s)]) if isinstance(s, str) else s
             for s in script

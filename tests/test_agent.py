@@ -114,6 +114,7 @@ class StopReasonProvider:
 
     name = "stub"
     model = "stub-model"
+    context_window = 200_000
 
     def __init__(self, reasons: list[StopReason]) -> None:
         self._reasons = reasons

@@ -70,6 +70,8 @@ class AnthropicProvider:
         client: anthropic.AsyncAnthropic | None = None,
     ) -> None:
         self.model = model
+        # Current Claude models have a 1M-token window; Haiku 4.5 has 200K.
+        self.context_window = 200_000 if "haiku" in model else 1_000_000
         self.max_tokens = max_tokens
         self.thinking = thinking
         self._client = client or anthropic.AsyncAnthropic()

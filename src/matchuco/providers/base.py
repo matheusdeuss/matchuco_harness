@@ -52,6 +52,8 @@ class ProviderError(Exception):
 class Provider(Protocol):
     name: str
     model: str
+    # Max tokens one request may hold (prompt + history + output). Drives compaction.
+    context_window: int
 
     def stream(
         self,

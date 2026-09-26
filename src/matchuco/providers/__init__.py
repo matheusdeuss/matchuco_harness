@@ -40,6 +40,7 @@ def create_provider(name: str, model: str | None = None, base_url: str | None = 
         from matchuco.providers.openai_compat import (
             DEFAULT_MODEL,
             OLLAMA_BASE_URL,
+            OLLAMA_CONTEXT_WINDOW,
             OLLAMA_DEFAULT_MODEL,
             OpenAICompatProvider,
         )
@@ -50,6 +51,7 @@ def create_provider(name: str, model: str | None = None, base_url: str | None = 
                 name="ollama",
                 base_url=base_url or OLLAMA_BASE_URL,
                 api_key="ollama",  # Ollama ignores the key, but the SDK requires one
+                context_window=OLLAMA_CONTEXT_WINDOW,
             )
         return OpenAICompatProvider(model or DEFAULT_MODEL, base_url=base_url)
 

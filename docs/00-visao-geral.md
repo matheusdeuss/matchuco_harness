@@ -26,7 +26,7 @@ A harness só oferece as ferramentas e aplica as regras.
 | Modelos (vários, trocáveis) | 1 | `providers/` |
 | Loop agentic + ferramentas | 2 | `agent.py`, `tools/` |
 | Modos de permissão e regras | 3 | `permissions.py`, `config.py` |
-| Janela de contexto, compactação, CLAUDE.md | 4 | `context/` |
+| Janela de contexto, compactação, AGENTS.md/CLAUDE.md | 4 | `context.py`, `agent.py` |
 | Sessões JSONL, resume/fork, checkpoints, auto memory | 5 | `sessions/`, `checkpoints/`, `memory/` |
 | Subagents | 6 | `extensions/subagents.py` |
 | Hooks, skills | 7 | `extensions/` |

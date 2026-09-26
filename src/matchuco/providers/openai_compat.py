@@ -36,6 +36,27 @@ DEFAULT_MODEL = "gpt-5.4-mini"
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
 OLLAMA_DEFAULT_MODEL = "qwen3-coder"
 
+# Chat Completions does not report a model's context window, so we keep a small
+# table of known prefixes. Unknown models get a conservative default; pass
+# --context-window to override (local servers are often configured smaller).
+_CONTEXT_WINDOWS = (
+    ("gpt-4.1", 1_047_576),
+    ("gpt-5", 400_000),
+    ("gpt-6", 400_000),
+    ("o4", 200_000),
+    ("o3", 200_000),
+)
+DEFAULT_CONTEXT_WINDOW = 128_000
+OLLAMA_CONTEXT_WINDOW = 32_768
+
+
+def context_window_for(model: str) -> int:
+    return next(
+        (size for prefix, size in _CONTEXT_WINDOWS if model.startswith(prefix)),
+        DEFAULT_CONTEXT_WINDOW,
+    )
+
+
 _STOP_REASONS: dict[str, StopReason] = {
     "stop": "end_turn",
     "tool_calls": "tool_use",
@@ -53,10 +74,12 @@ class OpenAICompatProvider:
         name: str = "openai",
         base_url: str | None = None,
         api_key: str | None = None,
+        context_window: int | None = None,
         client: openai.AsyncOpenAI | None = None,
     ) -> None:
         self.name = name
         self.model = model
+        self.context_window = context_window or context_window_for(model)
         try:
             self._client = client or openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
         except openai.OpenAIError as e:  # raised at construction when no API key is set

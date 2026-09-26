@@ -76,12 +76,12 @@ def test_parse_reply() -> None:
     assert parse_reply("use pytest -x", True) == PermissionReply("no", feedback="use pytest -x")
 
 
-def test_mode_command(tmp_path: Path) -> None:
+async def test_mode_command(tmp_path: Path) -> None:
     from matchuco.cli import handle_command
 
     agent = Agent(FakeProvider([]), root=tmp_path)
-    assert handle_command(agent, "/mode plan")
+    assert await handle_command(agent, "/mode plan")
     assert agent.permissions.mode == "plan"
-    handle_command(agent, "/mode nonsense")
+    await handle_command(agent, "/mode nonsense")
     assert agent.permissions.mode == "plan"
-    assert handle_command(agent, "/exit") is False
+    assert await handle_command(agent, "/exit") is False

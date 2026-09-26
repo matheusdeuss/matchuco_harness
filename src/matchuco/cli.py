@@ -24,10 +24,14 @@ from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.table import Table
 
 from matchuco import __version__
 from matchuco.agent import (
     Agent,
+    Compacted,
+    Compacting,
+    ContextReport,
     TextDelta,
     ThinkingDelta,
     ToolFinished,
@@ -77,6 +81,13 @@ async def run_turn(agent: Agent, prompt: str) -> None:
             case ToolFinished(result=result):
                 style = "red" if result.is_error else "dim"
                 console.print(f"[{style}]{_preview(result.content)}[/{style}]", highlight=False)
+            case Compacting(auto=auto, tokens=tokens):
+                why = "context is filling up" if auto else "requested"
+                console.print(
+                    f"\n[yellow]compacting the conversation ({why}, ~{tokens:,} tokens)...[/yellow]"
+                )
+            case Compacted(tokens_before=before, tokens_after=after):
+                console.print(f"[yellow]compacted: ~{before:,} -> ~{after:,} tokens[/yellow]")
             case TurnEnd(reason=reason, steps=steps):
                 console.out("")
                 if reason == "max_steps":
@@ -157,13 +168,37 @@ def make_approver() -> Approver:
 
 
 HELP = (
-    "/mode [name] shows or sets the permission mode (shift+tab cycles), "
-    "/permissions lists rules, /clear resets the conversation, /tools lists tools, "
-    "/usage shows tokens, /exit quits"
+    "/context shows what fills the context window, /compact [focus] summarizes the "
+    "conversation, /mode [name] shows or sets the permission mode (shift+tab cycles), "
+    "/permissions lists rules, /clear starts over, /tools lists tools, /usage shows tokens, "
+    "/exit quits"
 )
 
 
-def handle_command(agent: Agent, line: str) -> bool:
+def render_context(report: ContextReport) -> None:
+    """A /context breakdown: a bar, then the categories that fill it."""
+    width = 50
+    used = report.used
+    filled = min(width, round(width * used / report.window))
+    limit = min(width, round(width * report.threshold / report.window))
+    bar = "".join("#" if i < filled else ("|" if i == limit else ".") for i in range(width))
+    console.print(
+        f"[bold]context[/bold] [{bar}] ~{used:,} / {report.window:,} tokens "
+        f"({used / report.window:.1%}); auto-compacts at {report.threshold:,}",
+        highlight=False,
+        markup=True,
+    )
+    table = Table(box=None, show_header=False, padding=(0, 2))
+    for name, tokens in report.categories:
+        table.add_row(name, f"{tokens:,}", f"{tokens / report.window:.1%}")
+    console.print(table)
+    note = "estimates at ~4 chars/token"
+    if report.last_reported is not None:
+        note += f"; the provider reported {report.last_reported:,} input tokens last request"
+    console.print(f"[dim]{note}[/dim]")
+
+
+async def handle_command(agent: Agent, line: str) -> bool:
     """Run a slash command. Returns False when the REPL should exit."""
     name, _, arg = line.partition(" ")
     arg = arg.strip()
@@ -173,6 +208,18 @@ def handle_command(agent: Agent, line: str) -> bool:
     if name == "/clear":
         agent.clear()
         console.print("[dim]conversation cleared[/dim]")
+    elif name == "/context":
+        render_context(agent.context_report())
+    elif name == "/compact":
+        console.print("[yellow]compacting...[/yellow]")
+        result = await agent.compact(arg)
+        if result is None:
+            console.print("[dim]nothing to compact yet[/dim]")
+        else:
+            console.print(
+                f"[yellow]compacted: ~{result.tokens_before:,} -> ~{result.tokens_after:,} "
+                "tokens[/yellow]"
+            )
     elif name == "/tools":
         console.print(", ".join(agent.registry.names))
     elif name == "/usage":
@@ -211,8 +258,10 @@ async def repl(agent: Agent) -> None:
 
     def toolbar() -> HTML:
         mode = agent.permissions.mode
+        used = agent.context_tokens() / agent.context_window
         return HTML(
             f"mode: <style fg='{MODE_STYLES[mode]}'><b>{mode}</b></style>  (shift+tab to cycle)"
+            f"   context: {used:.0%}"
         )
 
     session: PromptSession[str] = PromptSession(key_bindings=bindings, bottom_toolbar=toolbar)
@@ -224,8 +273,11 @@ async def repl(agent: Agent) -> None:
         if not line:
             continue
         if line.startswith("/"):
-            if not handle_command(agent, line):
-                return
+            try:
+                if not await handle_command(agent, line):
+                    return
+            except ProviderError as e:
+                console.print(f"[red]error:[/red] {e}")
             continue
 
         try:
@@ -262,6 +314,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=None,
         help="permission mode (default: from settings, else 'default')",
     )
+    parser.add_argument(
+        "--context-window",
+        type=int,
+        default=None,
+        help="override the model's context window in tokens (e.g. to match a local server)",
+    )
     parser.add_argument("-p", "--print", dest="prompt", help="answer one prompt and exit")
     parser.add_argument("--version", action="version", version=f"matchuco {__version__}")
     return parser.parse_args(argv)
@@ -289,6 +347,8 @@ def build_agent(args: argparse.Namespace, provider: Provider, *, interactive: bo
     }
     if args.max_steps is not None:
         kwargs["max_steps"] = args.max_steps
+    if args.context_window is not None:
+        kwargs["context_window"] = args.context_window
     return Agent(provider, **kwargs)
 
 
