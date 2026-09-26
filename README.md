@@ -1,5 +1,7 @@
 # matchuco
 
+🇧🇷 [Versão em português](#versão-em-português)
+
 A multi-provider **agentic harness** built from scratch in Python — a learning
 project that reimplements the core ideas behind
 [Claude Code](https://code.claude.com/docs/en/how-claude-code-works): the
@@ -137,5 +139,80 @@ Each phase has a write-up (in Portuguese) explaining the concept behind it:
 [`docs/`](docs/).
 
 ## License
+
+MIT
+
+---
+
+## Versão em português
+
+Uma **agentic harness** multi-provedor construída do zero em Python. É um
+projeto de estudo que reimplementa as ideias centrais do
+[Claude Code](https://code.claude.com/docs/pt/how-claude-code-works): loop
+agentic, ferramentas, permissões, gerenciamento de contexto, sessões,
+subagents, hooks, skills, MCP e evals.
+
+> Uma *agentic harness* é a camada em volta do modelo que lhe dá ferramentas e
+> controla o que ele vê. O modelo raciocina; a harness age.
+
+### Status
+
+| Fase | Tema | Status |
+| --- | --- | --- |
+| 0 | Setup do projeto (uv, ruff, mypy, pytest, CI) | ✅ |
+| 1 | Abstração de provedores: Anthropic, compatíveis com OpenAI (OpenAI, Ollama...), fake | ✅ |
+| 2 | Loop agentic + ferramentas (read, write, edit, glob, grep, shell) | ✅ |
+| 3 | Permissões: modos (default, accept_edits, plan, bypass) e regras allow/ask/deny | ✅ |
+| 4 | Context engineering: CLAUDE.md/AGENTS.md, contagem de tokens, compactação, cache | ⏳ |
+| 5 | Sessões (JSONL), resume/fork, checkpoints + rewind, auto memory | ⏳ |
+| 6 | Subagents | ⏳ |
+| 7 | Hooks e skills | ⏳ |
+| 8 | Cliente MCP | ⏳ |
+| 9 | Evals | ⏳ |
+
+### Como funciona
+
+- **Tipos neutros de provedor** ([`messages.py`](src/matchuco/messages.py)):
+  todo o resto da harness fala um formato único de mensagem; cada adaptador de
+  provedor traduz para o formato da sua API e transmite a resposta em streaming.
+- **Loop agentic** ([`agent.py`](src/matchuco/agent.py)): envia a conversa e os
+  schemas das ferramentas, executa o que o modelo pedir, devolve os resultados
+  e repete até o modelo responder sem chamar ferramentas (limitado por
+  `--max-steps`). Uma ferramenta que falha vira um `tool_result` de erro, não
+  uma exceção, para o modelo poder se corrigir.
+- **Permissões** ([`permissions.py`](src/matchuco/permissions.py)): toda tool
+  call passa por um portão que combina o **modo** da sessão, **regras** de
+  `settings.json` e o **tipo** da ferramenta. Regras `deny` vencem tudo;
+  comandos compostos são avaliados por subcomando; no plan mode o modelo só lê
+  e apresenta um plano via `exit_plan_mode`.
+
+### Início rápido
+
+Requer [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync
+cp .env.example .env   # adicione ANTHROPIC_API_KEY e/ou OPENAI_API_KEY
+uv run matchuco                          # agente interativo (padrão: anthropic)
+uv run matchuco --provider openai        # gpt-5.4-mini por padrão
+uv run matchuco --provider ollama --model qwen3-coder   # local, grátis
+uv run matchuco --provider fake -p "oi"  # sem chave de API
+uv run matchuco --mode plan              # só leitura: explora e propõe um plano
+```
+
+### Desenvolvimento
+
+```bash
+uv run pytest        # testes offline com o provedor fake
+uv run ruff check .
+uv run mypy          # modo strict
+```
+
+### Notas de estudo
+
+Cada fase tem um texto em português explicando o conceito por trás dela:
+[`docs/`](docs/).
+
+### Licença
 
 MIT
