@@ -45,7 +45,12 @@ def default_tools() -> list[Tool[Any]]:
 
     Search before read before write is deliberate: tool order is a weak hint,
     and the cheap, safe tools should be the ones that come to mind first.
+
+    `TaskTool` is imported here, not at module import: loading it pulls in
+    permissions, and permissions imports this package.
     """
+    from matchuco.extensions.subagents import TaskTool
+
     return [
         GlobTool(),
         GrepTool(),
@@ -55,6 +60,7 @@ def default_tools() -> list[Tool[Any]]:
         ShellTool(),
         ExitPlanModeTool(),
         RememberTool(),
+        TaskTool(),
     ]
 
 

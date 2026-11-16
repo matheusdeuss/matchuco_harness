@@ -21,7 +21,7 @@ hooks, skills, MCP and evals.
 | 3 | Permissions: modes (default, accept_edits, plan, bypass) and allow/ask/deny rules | ✅ |
 | 4 | Context engineering: AGENTS.md/CLAUDE.md, environment, token tracking, compaction | ✅ |
 | 5 | Sessions (JSONL), resume/fork, checkpoints + rewind, auto memory | ✅ |
-| 6 | Subagents | ⏳ |
+| 6 | Subagents | ✅ |
 | 7 | Hooks and skills | ⏳ |
 | 8 | MCP client | ⏳ |
 | 9 | Evals | ⏳ |
@@ -144,6 +144,13 @@ uv run matchuco --resume <id>
 uv run matchuco --fork <id>
 ```
 
+### Subagents
+
+The `task` tool runs a child agent on its own message list and returns only
+that child's final text. The child is read-only unless `readonly` is false,
+and even then its permission rules are a copy of the parent's. A child cannot
+start another child. The parent's transcript records the child's session id.
+
 ## Quickstart
 
 Requires [uv](https://docs.astral.sh/uv/).
@@ -202,7 +209,7 @@ subagents, hooks, skills, MCP e evals.
 | 3 | Permissões: modos (default, accept_edits, plan, bypass) e regras allow/ask/deny | ✅ |
 | 4 | Context engineering: AGENTS.md/CLAUDE.md, ambiente, contagem de tokens, compactação | ✅ |
 | 5 | Sessões (JSONL), resume/fork, checkpoints + rewind, auto memory | ✅ |
-| 6 | Subagents | ⏳ |
+| 6 | Subagents | ✅ |
 | 7 | Hooks e skills | ⏳ |
 | 8 | Cliente MCP | ⏳ |
 | 9 | Evals | ⏳ |
@@ -235,6 +242,10 @@ subagents, hooks, skills, MCP e evals.
   `edit` sem apagar o que ficou registrado. A tool `remember` anexa notas em
   `.matchuco/memory.md`; o arquivo entra no system prompt só no início da
   sessão, e vazio não muda nada.
+- **Subagents**: a tool `task` abre um agente filho com a própria conversa e
+  devolve só o texto final. O filho é somente leitura por padrão, não herda
+  permissão maior que a do pai e não pode abrir outro filho. O JSONL do pai
+  guarda o id da sessão do filho.
 
 ### Início rápido
 

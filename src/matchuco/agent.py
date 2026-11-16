@@ -274,10 +274,14 @@ class Agent:
         context_window: int | None = None,
         compact_threshold: float = DEFAULT_COMPACT_THRESHOLD,
         session: SessionLog | None = None,
+        depth: int = 0,
     ) -> None:
         self.provider = provider
         self.registry = ToolRegistry(list(default_tools() if tools is None else tools))
         self.context = ToolContext(root=root or Path.cwd())
+        self.depth = depth
+        self.context.depth = depth
+        self.context.spawn = self._spawn_subagent
         # system=None: the full prompt with environment and AGENTS.md files,
         # rebuilt on /clear. An explicit string is used as-is (tests, embedding).
         self._custom_system = system
@@ -440,12 +444,17 @@ class Agent:
         )
         self._announced_checkpoints.append((saved.id, saved.path))
 
-    def _log_model_turn(self, message: Message, results: list[ToolResultBlock]) -> None:
+    def _log_model_turn(
+        self,
+        message: Message,
+        results: list[ToolResultBlock],
+        child_sessions: Sequence[str | None] = (),
+    ) -> None:
         """Append one model step to the transcript.
 
         Checkpoints go *before* the assistant message. Rewinding to one of them
         then drops the tool call and its results together, which keeps the
-        rebuilt history valid.
+        rebuilt history valid. A `task` result carries the child session id.
         """
         for checkpoint in self._batch_checkpoints:
             self._log(checkpoint)
@@ -454,8 +463,23 @@ class Agent:
         if not results:
             return
         seen = self._files_read_snapshot()
-        for result in results:
-            self._log(ToolResultEvent(result=result.model_copy(deep=True), files_read=dict(seen)))
+        sessions = list(child_sessions)
+        if len(sessions) != len(results):
+            sessions = [None] * len(results)
+        for result, child_id in zip(results, sessions, strict=True):
+            self._log(
+                ToolResultEvent(
+                    result=result.model_copy(deep=True),
+                    files_read=dict(seen),
+                    child_session_id=child_id,
+                )
+            )
+
+    async def _spawn_subagent(self, prompt: str, *, description: str, readonly: bool) -> str:
+        # Imported here: extensions.subagents imports Agent only while a task runs.
+        from matchuco.extensions.subagents import run_subagent
+
+        return await run_subagent(self, prompt, description=description, readonly=readonly)
 
     def adopt(self, state: SessionState) -> None:
         """Replace the conversation with one rebuilt from the transcript."""
@@ -598,16 +622,19 @@ class Agent:
             self._edit_group = uuid.uuid4().hex[:12]
             self._batch_checkpoints = []
             results: list[ToolResultBlock] = []
+            child_sessions: list[str | None] = []
             gate = self.permissions.gate(self.context, self.approver)
             for block in tool_uses:
                 yield ToolStarted(block.id, block.name, block.input)
+                self.context.last_child_session_id = None
                 result = await self.registry.execute(block, self.context, gate)
+                child_sessions.append(self.context.last_child_session_id)
                 while self._announced_checkpoints:
                     checkpoint_id, checkpoint_path = self._announced_checkpoints.pop(0)
                     yield CheckpointSaved(checkpoint_id, checkpoint_path)
                 yield ToolFinished(block.id, block.name, result)
                 results.append(result)
-            self._log_model_turn(response.message, results)
+            self._log_model_turn(response.message, results, child_sessions)
             # Every tool_use must be answered in a single user message, in order,
             # or the next request is rejected as malformed.
             self.history.append(Message(role="user", content=list(results)))
