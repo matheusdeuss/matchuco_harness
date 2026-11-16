@@ -21,11 +21,13 @@ rather than editing the old one (see `compact`).
 from __future__ import annotations
 
 import re
+import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from matchuco.checkpoints import CheckpointStore
 from matchuco.context import (
     SystemPrompt,
     block_category,
@@ -55,15 +57,33 @@ from matchuco.providers.base import (
     ToolUseStart,
     complete,
 )
+from matchuco.sessions import (
+    CheckpointEvent,
+    CompactionEvent,
+    ModelMessageEvent,
+    RewindEvent,
+    SessionError,
+    SessionEvent,
+    SessionLog,
+    SessionState,
+    ToolResultEvent,
+    UserMessageEvent,
+    checkpoints_to_restore,
+    reconstruct,
+    refresh_files_read,
+    state_at_checkpoint,
+)
 from matchuco.tools import Tool, ToolContext, ToolRegistry, default_tools
 
 __all__ = [
     "Agent",
     "AgentEvent",
+    "CheckpointSaved",
     "Compacted",
     "Compacting",
     "ContextOverflowError",
     "ContextReport",
+    "SessionError",
     "TextDelta",
     "ThinkingDelta",
     "ToolFinished",
@@ -204,8 +224,23 @@ class TurnEnd:
     steps: int
 
 
+@dataclass(frozen=True)
+class CheckpointSaved:
+    """An edit is about to land; `id` is the handle `/rewind` takes."""
+
+    id: str
+    path: str
+
+
 AgentEvent = (
-    TextDelta | ThinkingDelta | ToolStarted | ToolFinished | Compacting | Compacted | TurnEnd
+    TextDelta
+    | ThinkingDelta
+    | ToolStarted
+    | ToolFinished
+    | Compacting
+    | Compacted
+    | CheckpointSaved
+    | TurnEnd
 )
 
 
@@ -238,6 +273,7 @@ class Agent:
         approver: Approver | None = None,
         context_window: int | None = None,
         compact_threshold: float = DEFAULT_COMPACT_THRESHOLD,
+        session: SessionLog | None = None,
     ) -> None:
         self.provider = provider
         self.registry = ToolRegistry(list(default_tools() if tools is None else tools))
@@ -261,6 +297,19 @@ class Agent:
         #  len(history) at that moment). None = no trustworthy measurement yet.
         self._baseline: tuple[int, int] | None = None
         self._last_reported: int | None = None
+        # Transcript events for the current turn. Flushed when the turn ends,
+        # discarded when it fails -- a failed turn is rolled back in memory,
+        # and the log must describe the same conversation.
+        self.session = session
+        self.checkpoints: CheckpointStore | None = None
+        self._pending: list[SessionEvent] = []
+        self._batch_checkpoints: list[CheckpointEvent] = []
+        self._announced_checkpoints: list[tuple[str, str]] = []
+        self._edit_snapshot: dict[str, float] = {}
+        self._edit_group = ""
+        if session is not None:
+            self.checkpoints = CheckpointStore(self.context.root)
+            self.context.on_edit = self._checkpoint_before_edit
 
     # --- system prompt ---------------------------------------------------------
 
@@ -289,14 +338,23 @@ class Agent:
         return None
 
     def clear(self) -> None:
-        """Start a new conversation. Instruction files are re-read, tool state is dropped."""
+        """Start a new conversation. Instruction files are re-read, tool state is dropped.
+
+        The previous transcript, if any, stays on disk under its old id. This
+        conversation gets a new id, and the system prompt is assembled again,
+        so a note saved with `remember` becomes visible.
+        """
         self.history.clear()
         self.context.files_read.clear()
         self._announced_mode = "default"  # a fresh conversation has heard nothing yet
         self._carryover = []
         self._baseline = None
         self._last_reported = None
+        self._pending.clear()
+        self._batch_checkpoints.clear()
         self.system_prompt = self._build_system_prompt()
+        if self.session is not None:
+            self.session = SessionLog.create(self.context.root)
 
     # --- measuring ---------------------------------------------------------------
 
@@ -348,6 +406,102 @@ class Agent:
         else:
             self._baseline = None  # provider gave no usage; fall back to estimating
 
+    # --- session transcript ------------------------------------------------------
+
+    def _log(self, event: SessionEvent) -> None:
+        if self.session is not None:
+            self._pending.append(event)
+
+    def _flush_session(self) -> None:
+        if self.session is None or not self._pending:
+            return
+        for event in self._pending:
+            self.session.append(event)
+        self._pending.clear()
+
+    def _files_read_snapshot(self) -> dict[str, float]:
+        return {
+            self.context.display(path): mtime for path, mtime in self.context.files_read.items()
+        }
+
+    def _checkpoint_before_edit(self, path: Path) -> None:
+        """Capture the file, then remember the id until the batch is logged."""
+        if self.checkpoints is None:
+            return
+        saved = self.checkpoints.capture(path)
+        self._batch_checkpoints.append(
+            CheckpointEvent(
+                id=saved.id,
+                path=saved.path,
+                existed=saved.existed,
+                group=self._edit_group,
+                files_read=dict(self._edit_snapshot),
+            )
+        )
+        self._announced_checkpoints.append((saved.id, saved.path))
+
+    def _log_model_turn(self, message: Message, results: list[ToolResultBlock]) -> None:
+        """Append one model step to the transcript.
+
+        Checkpoints go *before* the assistant message. Rewinding to one of them
+        then drops the tool call and its results together, which keeps the
+        rebuilt history valid.
+        """
+        for checkpoint in self._batch_checkpoints:
+            self._log(checkpoint)
+        self._batch_checkpoints = []
+        self._log(ModelMessageEvent(message=message.model_copy(deep=True)))
+        if not results:
+            return
+        seen = self._files_read_snapshot()
+        for result in results:
+            self._log(ToolResultEvent(result=result.model_copy(deep=True), files_read=dict(seen)))
+
+    def adopt(self, state: SessionState) -> None:
+        """Replace the conversation with one rebuilt from the transcript."""
+        self.history = list(state.messages)
+        self._carryover = list(state.carryover)
+        self.context.files_read = {}
+        root = self.context.root
+        for relative, mtime in state.files_read.items():
+            path = (root / relative).resolve()
+            if path == root or root in path.parents:
+                self.context.files_read[path] = mtime
+        # The rebuilt history already contains whatever mode reminders were sent.
+        self._announced_mode = self.permissions.mode
+        self._baseline = None
+        self._last_reported = None
+        self._pending.clear()
+
+    def active_checkpoints(self) -> list[CheckpointEvent]:
+        """Checkpoints still in the rebuilt transcript (rewound ones are gone)."""
+        if self.session is None:
+            return []
+        self._flush_session()
+        return reconstruct(self.session.read_events()).checkpoints
+
+    def rewind(self, checkpoint_id: str) -> None:
+        """Restore files to a checkpoint and append a rewind event. The log is kept.
+
+        The next prompt re-announces the permission mode, because the reminder
+        may have been in a part of the conversation this rewind dropped.
+        """
+        if self.session is None or self.checkpoints is None:
+            raise SessionError("this agent has no session to rewind")
+        self._flush_session()
+        events = self.session.read_events()
+        point = state_at_checkpoint(events, checkpoint_id)
+        for cid in reversed(checkpoints_to_restore(events, checkpoint_id)):
+            self.checkpoints.restore(cid)
+        self.session.append(
+            RewindEvent(
+                checkpoint_id=checkpoint_id,
+                files_read=refresh_files_read(self.context.root, point.files_read),
+            )
+        )
+        self.adopt(reconstruct(self.session.read_events()))
+        self._announced_mode = "default"
+
     # --- the loop ---------------------------------------------------------------
 
     async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
@@ -366,11 +520,16 @@ class Agent:
         content.append(TextBlock(text=prompt))
         self._carryover = []
         self.history.append(Message(role="user", content=content))
+        self._log(UserMessageEvent(message=self.history[-1].model_copy(deep=True)))
 
         finished = False
         try:
             async for event in self._loop():
-                finished = isinstance(event, TurnEnd)
+                if isinstance(event, TurnEnd):
+                    # Flush before yielding so a caller that stops after TurnEnd
+                    # still leaves a transcript that matches `history`.
+                    self._flush_session()
+                    finished = True
                 yield event
         except BaseException:
             if not finished:
@@ -380,6 +539,9 @@ class Agent:
                     snapshot[2],
                     snapshot[3],
                 )
+                self._pending.clear()
+                self._batch_checkpoints.clear()
+                self._announced_checkpoints.clear()
             raise
 
     async def _loop(self) -> AsyncIterator[AgentEvent]:
@@ -422,6 +584,7 @@ class Agent:
 
             tool_uses = response.message.tool_uses
             if not tool_uses:
+                self._log_model_turn(response.message, [])
                 # `pause_turn` means the provider cut a long turn short; resending
                 # the same history lets the model pick up where it left off.
                 if response.stop_reason == "pause_turn":
@@ -429,13 +592,22 @@ class Agent:
                 yield TurnEnd(response.stop_reason, turn_usage, step)
                 return
 
+            # Snapshot before any tool in this response runs, so every checkpoint
+            # it takes describes the same pre-edit read set.
+            self._edit_snapshot = self._files_read_snapshot()
+            self._edit_group = uuid.uuid4().hex[:12]
+            self._batch_checkpoints = []
             results: list[ToolResultBlock] = []
             gate = self.permissions.gate(self.context, self.approver)
             for block in tool_uses:
                 yield ToolStarted(block.id, block.name, block.input)
                 result = await self.registry.execute(block, self.context, gate)
+                while self._announced_checkpoints:
+                    checkpoint_id, checkpoint_path = self._announced_checkpoints.pop(0)
+                    yield CheckpointSaved(checkpoint_id, checkpoint_path)
                 yield ToolFinished(block.id, block.name, result)
                 results.append(result)
+            self._log_model_turn(response.message, results)
             # Every tool_use must be answered in a single user message, in order,
             # or the next request is rejected as malformed.
             self.history.append(Message(role="user", content=list(results)))
@@ -450,6 +622,7 @@ class Agent:
         async for event in self._compact(auto=False, focus=focus):
             if isinstance(event, Compacted):
                 result = event
+        self._flush_session()
         return result
 
     async def _compact(
@@ -503,6 +676,14 @@ class Agent:
             self.history.clear()
             self._carryover = header
 
+        self._log(
+            CompactionEvent(
+                summary=summary,
+                auto=auto,
+                messages=[message.model_copy(deep=True) for message in self.history],
+                carryover=[block.model_copy(deep=True) for block in self._carryover],
+            )
+        )
         yield Compacted(auto, before, self.context_tokens(), summary)
 
     async def _summarize(self, messages: list[Message], focus: str) -> tuple[str, Usage]:

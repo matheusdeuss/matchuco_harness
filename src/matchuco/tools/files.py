@@ -116,6 +116,7 @@ class WriteTool(Tool[WriteInput]):
         if path.is_dir():
             raise ToolError(f"{ctx.display(path)} is a directory")
         ctx.check_readable_before_write(path)
+        ctx.note_edit(path)
 
         existed = path.exists()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,6 +174,7 @@ class EditTool(Tool[EditInput]):
                 "add surrounding lines to make it unique, or set replace_all"
             )
 
+        ctx.note_edit(path)
         path.write_text(text.replace(args.old_string, args.new_string), encoding="utf-8")
         ctx.mark_read(path)
         where = f"{count} occurrences" if count > 1 else "1 occurrence"

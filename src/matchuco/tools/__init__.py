@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from matchuco.memory import RememberTool
 from matchuco.tools.base import (
     Gate,
     Tool,
@@ -25,6 +26,7 @@ __all__ = [
     "GlobTool",
     "GrepTool",
     "ReadTool",
+    "RememberTool",
     "ShellTool",
     "Tool",
     "ToolContext",
@@ -52,6 +54,7 @@ def default_tools() -> list[Tool[Any]]:
         WriteTool(),
         ShellTool(),
         ExitPlanModeTool(),
+        RememberTool(),
     ]
 
 

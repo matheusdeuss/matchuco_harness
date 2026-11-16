@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Literal
 
 from matchuco.config import user_dir
+from matchuco.memory import load_memory
 from matchuco.messages import (
     ContentBlock,
     Message,
@@ -222,6 +223,18 @@ def build_system_prompt(base: str, root: Path) -> SystemPrompt:
                 "The files below contain instructions from the user and the project. "
                 "Follow them; when two conflict, the one listed later is more specific and wins.",
             ),
+        )
+    # Empty memory adds no part, so a project without notes keeps today's prompt.
+    # Loaded only here, while the prompt is assembled; callers must not rebuild
+    # the prompt when `remember` appends to the file mid-session.
+    if memory := load_memory(root):
+        parts.append(
+            (
+                "auto memory",
+                "# Auto memory\n\n"
+                "Notes loaded when this session started. They do not update mid-session.\n\n"
+                + memory,
+            )
         )
     return SystemPrompt(tuple(parts), tuple(instructions))
 

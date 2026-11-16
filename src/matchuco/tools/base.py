@@ -63,6 +63,9 @@ class ToolContext:
 
     root: Path = field(default_factory=Path.cwd)
     files_read: dict[Path, float] = field(default_factory=dict)
+    # Installed by a session. Called immediately before an edit or write changes
+    # bytes, and only after the call has been validated and permitted.
+    on_edit: Callable[[Path], None] | None = None
 
     def __post_init__(self) -> None:
         self.root = self.root.resolve()
@@ -94,6 +97,11 @@ class ToolContext:
 
     def mark_read(self, path: Path) -> None:
         self.files_read[path] = path.stat().st_mtime if path.exists() else time.time()
+
+    def note_edit(self, path: Path) -> None:
+        """Checkpoint hook. No-op when no session is recording this agent."""
+        if self.on_edit is not None:
+            self.on_edit(path)
 
     def check_readable_before_write(self, path: Path) -> None:
         """Enforce read-before-write. New files are exempt -- nothing to destroy."""

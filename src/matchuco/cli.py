@@ -29,6 +29,7 @@ from rich.table import Table
 from matchuco import __version__
 from matchuco.agent import (
     Agent,
+    CheckpointSaved,
     Compacted,
     Compacting,
     ContextReport,
@@ -48,6 +49,7 @@ from matchuco.permissions import (
     Rule,
 )
 from matchuco.providers import PROVIDER_NAMES, Provider, ProviderError, create_provider
+from matchuco.sessions import SessionError, SessionLog, SessionState
 
 console = Console()
 
@@ -81,6 +83,11 @@ async def run_turn(agent: Agent, prompt: str) -> None:
             case ToolFinished(result=result):
                 style = "red" if result.is_error else "dim"
                 console.print(f"[{style}]{_preview(result.content)}[/{style}]", highlight=False)
+            case CheckpointSaved(id=checkpoint_id, path=path):
+                console.print(
+                    f"[dim]checkpoint {checkpoint_id} (before editing {path})[/dim]",
+                    highlight=False,
+                )
             case Compacting(auto=auto, tokens=tokens):
                 why = "context is filling up" if auto else "requested"
                 console.print(
@@ -169,9 +176,9 @@ def make_approver() -> Approver:
 
 HELP = (
     "/context shows what fills the context window, /compact [focus] summarizes the "
-    "conversation, /mode [name] shows or sets the permission mode (shift+tab cycles), "
-    "/permissions lists rules, /clear starts over, /tools lists tools, /usage shows tokens, "
-    "/exit quits"
+    "conversation, /rewind [id] restores files to a checkpoint, /mode [name] shows or sets "
+    "the permission mode (shift+tab cycles), /permissions lists rules, /clear starts over, "
+    "/tools lists tools, /usage shows tokens, /exit quits"
 )
 
 
@@ -235,6 +242,21 @@ async def handle_command(agent: Agent, line: str) -> bool:
         console.print(f"mode: [bold]{policy.mode}[/bold]")
         for label, rules in (("deny", policy.deny), ("ask", policy.ask), ("allow", policy.allow)):
             console.print(f"{label}: {', '.join(map(str, rules)) or '(none)'}")
+    elif name == "/rewind":
+        if agent.session is None:
+            console.print("[red]this agent has no session to rewind[/red]")
+        elif not arg:
+            checkpoints = agent.active_checkpoints()
+            if not checkpoints:
+                console.print(
+                    "[dim]no checkpoints yet (they are taken before write and edit)[/dim]"
+                )
+            else:
+                for checkpoint in checkpoints:
+                    console.print(f"{checkpoint.id}  {checkpoint.path}", highlight=False)
+        else:
+            agent.rewind(arg)
+            console.print(f"[yellow]rewound to {arg}[/yellow] (the transcript was kept)")
     elif name == "/help":
         console.print(HELP)
     else:
@@ -276,13 +298,13 @@ async def repl(agent: Agent) -> None:
             try:
                 if not await handle_command(agent, line):
                     return
-            except ProviderError as e:
+            except (ProviderError, SessionError) as e:
                 console.print(f"[red]error:[/red] {e}")
             continue
 
         try:
             await run_turn(agent, line)
-        except ProviderError as e:
+        except (ProviderError, SessionError) as e:
             console.print(f"[red]error:[/red] {e}")
         except (KeyboardInterrupt, asyncio.CancelledError):
             console.print("\n[yellow]interrupted[/yellow]")
@@ -321,6 +343,17 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="override the model's context window in tokens (e.g. to match a local server)",
     )
     parser.add_argument("-p", "--print", dest="prompt", help="answer one prompt and exit")
+    sessions = parser.add_mutually_exclusive_group()
+    sessions.add_argument(
+        "--resume",
+        metavar="ID",
+        help="continue an existing session from .matchuco/sessions/<id>.jsonl",
+    )
+    sessions.add_argument(
+        "--fork",
+        metavar="ID",
+        help="copy a session to a new id and continue the copy; the original is left intact",
+    )
     parser.add_argument("--version", action="version", version=f"matchuco {__version__}")
     return parser.parse_args(argv)
 
@@ -349,7 +382,23 @@ def build_agent(args: argparse.Namespace, provider: Provider, *, interactive: bo
         kwargs["max_steps"] = args.max_steps
     if args.context_window is not None:
         kwargs["context_window"] = args.context_window
-    return Agent(provider, **kwargs)
+    log, state = open_session(root, resume=args.resume, fork=args.fork)
+    kwargs["session"] = log
+    agent = Agent(provider, **kwargs)
+    if state is not None:
+        agent.adopt(state)
+    return agent
+
+
+def open_session(
+    root: Path, *, resume: str | None, fork: str | None
+) -> tuple[SessionLog, SessionState | None]:
+    """Start a new transcript, or rebuild one from `--resume` / `--fork`."""
+    if resume:
+        return SessionLog.resume(root, resume)
+    if fork:
+        return SessionLog.fork(root, fork)
+    return SessionLog.create(root), None
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -358,9 +407,11 @@ def main(argv: list[str] | None = None) -> None:
     try:
         provider = create_provider(args.provider, args.model, args.base_url)
         agent = build_agent(args, provider, interactive=not args.prompt)
-    except (ProviderError, SettingsError) as e:
+    except (ProviderError, SettingsError, SessionError) as e:
         console.print(f"[red]error:[/red] {e}")
         sys.exit(1)
+    if agent.session is not None:
+        console.print(f"[dim]session {agent.session.id}[/dim]")
     if args.prompt:
         sys.exit(asyncio.run(one_shot(agent, args.prompt)))
     asyncio.run(repl(agent))
