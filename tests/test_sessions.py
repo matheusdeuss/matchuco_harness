@@ -129,7 +129,7 @@ async def test_failed_turn_is_not_written_to_the_log(tmp_path: Path) -> None:
 
 
 async def test_checkpoint_stores_the_previous_bytes(tmp_path: Path) -> None:
-    (tmp_path / "a.txt").write_text("v1\n")
+    (tmp_path / "a.txt").write_bytes(b"v1\n")
     log = SessionLog.create(tmp_path)
     agent = Agent(
         FakeProvider(
