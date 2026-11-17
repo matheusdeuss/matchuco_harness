@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from matchuco.memory import RememberTool
 from matchuco.tools.base import (
     Gate,
     Tool,
@@ -25,6 +26,7 @@ __all__ = [
     "GlobTool",
     "GrepTool",
     "ReadTool",
+    "RememberTool",
     "ShellTool",
     "Tool",
     "ToolContext",
@@ -43,7 +45,12 @@ def default_tools() -> list[Tool[Any]]:
 
     Search before read before write is deliberate: tool order is a weak hint,
     and the cheap, safe tools should be the ones that come to mind first.
+
+    `TaskTool` is imported here, not at module import: loading it pulls in
+    permissions, and permissions imports this package.
     """
+    from matchuco.extensions.subagents import TaskTool
+
     return [
         GlobTool(),
         GrepTool(),
@@ -52,6 +59,8 @@ def default_tools() -> list[Tool[Any]]:
         WriteTool(),
         ShellTool(),
         ExitPlanModeTool(),
+        RememberTool(),
+        TaskTool(),
     ]
 
 

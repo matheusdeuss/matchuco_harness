@@ -23,7 +23,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Generic, Literal, TypeVar
+from typing import Any, ClassVar, Generic, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -41,6 +41,12 @@ ToolKind = Literal["read", "edit", "execute", "plan"]
 
 # Called with a validated call; returns None to let it run, or a denial message.
 Gate = Callable[["Tool[Any]", BaseModel], Awaitable[str | None]]
+
+
+class SubagentSpawner(Protocol):
+    """Start a child agent. The child session id is left on `ToolContext`."""
+
+    def __call__(self, prompt: str, *, description: str, readonly: bool) -> Awaitable[str]: ...
 
 
 class ToolError(Exception):
@@ -63,6 +69,15 @@ class ToolContext:
 
     root: Path = field(default_factory=Path.cwd)
     files_read: dict[Path, float] = field(default_factory=dict)
+    # Installed by a session. Called immediately before an edit or write changes
+    # bytes, and only after the call has been validated and permitted.
+    on_edit: Callable[[Path], None] | None = None
+    # 0 is the agent the user is talking to. A subagent is 1 and cannot spawn.
+    depth: int = 0
+    spawn: SubagentSpawner | None = None
+    # Set by the `task` tool for the call that is in flight. The loop copies it
+    # onto that tool_result and clears it before the next call.
+    last_child_session_id: str | None = None
 
     def __post_init__(self) -> None:
         self.root = self.root.resolve()
@@ -94,6 +109,11 @@ class ToolContext:
 
     def mark_read(self, path: Path) -> None:
         self.files_read[path] = path.stat().st_mtime if path.exists() else time.time()
+
+    def note_edit(self, path: Path) -> None:
+        """Checkpoint hook. No-op when no session is recording this agent."""
+        if self.on_edit is not None:
+            self.on_edit(path)
 
     def check_readable_before_write(self, path: Path) -> None:
         """Enforce read-before-write. New files are exempt -- nothing to destroy."""

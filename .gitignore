@@ -19,6 +19,11 @@ htmlcov/
 # Personal, per-project harness settings (e.g. "always allow" answers)
 .matchuco/settings.local.json
 
+# Session transcripts, file snapshots, and auto memory are local to a workspace.
+.matchuco/sessions/
+.matchuco/checkpoints/
+.matchuco/memory.md
+
 # Editors / OS
 .vscode/
 .idea/

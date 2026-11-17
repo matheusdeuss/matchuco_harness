@@ -20,8 +20,8 @@ hooks, skills, MCP and evals.
 | 2 | Agentic loop + core tools (read, write, edit, glob, grep, shell) | ✅ |
 | 3 | Permissions: modes (default, accept_edits, plan, bypass) and allow/ask/deny rules | ✅ |
 | 4 | Context engineering: AGENTS.md/CLAUDE.md, environment, token tracking, compaction | ✅ |
-| 5 | Sessions (JSONL), resume/fork, checkpoints + rewind, auto memory | ⏳ |
-| 6 | Subagents | ⏳ |
+| 5 | Sessions (JSONL), resume/fork, checkpoints + rewind, auto memory | ✅ |
+| 6 | Subagents | ✅ |
 | 7 | Hooks and skills | ⏳ |
 | 8 | MCP client | ⏳ |
 | 9 | Evals | ⏳ |
@@ -129,6 +129,28 @@ with a guard against compaction thrashing. `/context` shows the breakdown,
 `/compact [focus]` compacts on demand, and a `## Compact Instructions`
 section in `AGENTS.md` tells the summarizer what to keep.
 
+### Sessions
+
+The CLI records every turn in `.matchuco/sessions/<id>.jsonl`. The file is
+append-only: resume rebuilds the conversation from it, fork copies it to a new
+id, and rewind appends an event instead of deleting lines. Before `write` or
+`edit` changes a file, the previous bytes are stored under
+`.matchuco/checkpoints/` and the id is printed so `/rewind <id>` can put them
+back. `remember` appends to `.matchuco/memory.md`; that file is read into the
+system prompt only when a session starts, and an empty file changes nothing.
+
+```bash
+uv run matchuco --resume <id>
+uv run matchuco --fork <id>
+```
+
+### Subagents
+
+The `task` tool runs a child agent on its own message list and returns only
+that child's final text. The child is read-only unless `readonly` is false,
+and even then its permission rules are a copy of the parent's. A child cannot
+start another child. The parent's transcript records the child's session id.
+
 ## Quickstart
 
 Requires [uv](https://docs.astral.sh/uv/).
@@ -143,6 +165,8 @@ uv run matchuco --provider fake -p "hi"  # no API key needed
 uv run matchuco --cwd ../other-repo      # point the tools at another workspace
 uv run matchuco --mode plan              # read-only: explore, then propose a plan
 uv run matchuco --context-window 20000   # a small window, to watch compaction happen
+uv run matchuco --resume <id>            # continue a saved session
+uv run matchuco --fork <id>              # branch a session; the original stays
 ```
 
 ## Development
@@ -184,8 +208,8 @@ subagents, hooks, skills, MCP e evals.
 | 2 | Loop agentic + ferramentas (read, write, edit, glob, grep, shell) | ✅ |
 | 3 | Permissões: modos (default, accept_edits, plan, bypass) e regras allow/ask/deny | ✅ |
 | 4 | Context engineering: AGENTS.md/CLAUDE.md, ambiente, contagem de tokens, compactação | ✅ |
-| 5 | Sessões (JSONL), resume/fork, checkpoints + rewind, auto memory | ⏳ |
-| 6 | Subagents | ⏳ |
+| 5 | Sessões (JSONL), resume/fork, checkpoints + rewind, auto memory | ✅ |
+| 6 | Subagents | ✅ |
 | 7 | Hooks e skills | ⏳ |
 | 8 | Cliente MCP | ⏳ |
 | 9 | Evals | ⏳ |
@@ -212,6 +236,16 @@ subagents, hooks, skills, MCP e evals.
   pelo provedor mais uma estimativa do que entrou depois; a 80% da janela a
   conversa é **compactada** num resumo. `/context` mostra a ocupação e
   `/compact [foco]` compacta sob demanda.
+- **Sessões** (`.matchuco/sessions/<id>.jsonl`): o CLI grava cada turno num
+  log append-only. `--resume` reconstrói a conversa, `--fork` copia o log para
+  um id novo e `/rewind <id>` restaura os bytes anteriores de um `write` ou
+  `edit` sem apagar o que ficou registrado. A tool `remember` anexa notas em
+  `.matchuco/memory.md`; o arquivo entra no system prompt só no início da
+  sessão, e vazio não muda nada.
+- **Subagents**: a tool `task` abre um agente filho com a própria conversa e
+  devolve só o texto final. O filho é somente leitura por padrão, não herda
+  permissão maior que a do pai e não pode abrir outro filho. O JSONL do pai
+  guarda o id da sessão do filho.
 
 ### Início rápido
 
@@ -226,6 +260,8 @@ uv run matchuco --provider ollama --model qwen3-coder   # local, grátis
 uv run matchuco --provider fake -p "oi"  # sem chave de API
 uv run matchuco --mode plan              # só leitura: explora e propõe um plano
 uv run matchuco --context-window 20000   # janela pequena, para ver a compactação
+uv run matchuco --resume <id>            # continua uma sessão salva
+uv run matchuco --fork <id>              # ramifica a sessão; a original fica
 ```
 
 ### Desenvolvimento
