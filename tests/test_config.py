@@ -47,8 +47,46 @@ def test_layers_concatenate_rules_and_override_mode(tmp_path: Path, home: Path) 
 
 
 def test_unknown_top_level_keys_are_ignored(tmp_path: Path, home: Path) -> None:
-    write(tmp_path / ".matchuco/settings.json", {"hooks": {}, "permissions": {}})
+    write(tmp_path / ".matchuco/settings.json", {"future_phase": {}, "permissions": {}})
     assert load_settings(tmp_path).permissions.allow == []
+    assert load_settings(tmp_path).hooks.PreToolUse == []
+
+
+def test_hooks_merge_across_layers(tmp_path: Path, home: Path) -> None:
+    root = tmp_path / "repo"
+    write(
+        home / "settings.json",
+        {"hooks": {"PreToolUse": [{"matcher": "shell", "deny": "user says no"}]}},
+    )
+    write(
+        root / ".matchuco/settings.json",
+        {
+            "hooks": {
+                "PreToolUse": [{"matcher": "shell", "deny": "user says no"}],
+                "PostToolUse": [{"matcher": "read", "note": "project note"}],
+            }
+        },
+    )
+    write(
+        root / ".matchuco/settings.local.json",
+        {"hooks": {"PostToolUse": [{"matcher": "write", "note": "local note"}]}},
+    )
+
+    hooks = load_settings(root).hooks
+    assert [(item.matcher, item.deny) for item in hooks.PreToolUse] == [("shell", "user says no")]
+    assert [(item.matcher, item.note) for item in hooks.PostToolUse] == [
+        ("read", "project note"),
+        ("write", "local note"),
+    ]
+
+
+def test_hook_settings_reject_a_shell_command(tmp_path: Path, home: Path) -> None:
+    write(
+        tmp_path / ".matchuco/settings.json",
+        {"hooks": {"PreToolUse": [{"matcher": "shell", "deny": "no", "command": "echo hi"}]}},
+    )
+    with pytest.raises(SettingsError, match=r"settings\.json"):
+        load_settings(tmp_path)
 
 
 @pytest.mark.parametrize(
