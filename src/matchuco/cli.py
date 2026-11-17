@@ -41,6 +41,7 @@ from matchuco.agent import (
 )
 from matchuco.config import SettingsError, add_local_allow_rule, build_policy, load_settings
 from matchuco.extensions.hooks import hooks_from_settings
+from matchuco.extensions.mcp_client import McpClient, McpError, connect_mcp_servers
 from matchuco.extensions.skills import SkillError
 from matchuco.permissions import (
     MODES,
@@ -405,6 +406,22 @@ def open_session(
     return SessionLog.create(root), None
 
 
+async def run_with_mcp(agent: Agent, args: argparse.Namespace) -> int:
+    """Start MCP servers from settings, run the turn or the REPL, then stop them."""
+    clients: list[McpClient] = []
+    try:
+        clients = await connect_mcp_servers(
+            agent.registry, load_settings(agent.context.root).mcp, cwd=agent.context.root
+        )
+        if args.prompt:
+            return await one_shot(agent, args.prompt)
+        await repl(agent)
+        return 0
+    finally:
+        for client in clients:
+            await client.close()
+
+
 def main(argv: list[str] | None = None) -> None:
     load_dotenv()
     args = parse_args(argv)
@@ -416,9 +433,13 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
     if agent.session is not None:
         console.print(f"[dim]session {agent.session.id}[/dim]")
+    try:
+        code = asyncio.run(run_with_mcp(agent, args))
+    except (ProviderError, McpError) as e:
+        console.print(f"[red]error:[/red] {e}")
+        sys.exit(1)
     if args.prompt:
-        sys.exit(asyncio.run(one_shot(agent, args.prompt)))
-    asyncio.run(repl(agent))
+        sys.exit(code)
 
 
 if __name__ == "__main__":

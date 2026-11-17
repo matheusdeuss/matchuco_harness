@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from matchuco.extensions.skills import SkillTool
 from matchuco.memory import RememberTool
 from matchuco.tools.base import (
     Gate,
@@ -29,7 +28,6 @@ __all__ = [
     "ReadTool",
     "RememberTool",
     "ShellTool",
-    "SkillTool",
     "Tool",
     "ToolContext",
     "ToolError",
@@ -48,11 +46,13 @@ def default_tools() -> list[Tool[Any]]:
     Search before read before write is deliberate: tool order is a weak hint,
     and the cheap, safe tools should be the ones that come to mind first.
 
-    `TaskTool` is imported here, not at module import: loading it pulls in
-    permissions, and permissions imports this package. `SkillTool` is listed
+    `TaskTool` and `SkillTool` are imported here, not at module import.
+    Importing them from the package root pulls `extensions` in, and that
+    package reads settings, which imports this package. `SkillTool` is listed
     always, like `exit_plan_mode`: adding it only when a skill file exists
     would change the tool list mid-session and drop the prompt cache.
     """
+    from matchuco.extensions.skills import SkillTool
     from matchuco.extensions.subagents import TaskTool
 
     return [

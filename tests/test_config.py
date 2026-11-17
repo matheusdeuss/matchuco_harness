@@ -80,6 +80,30 @@ def test_hooks_merge_across_layers(tmp_path: Path, home: Path) -> None:
     ]
 
 
+def test_mcp_servers_merge_by_name_and_reject_http(tmp_path: Path, home: Path) -> None:
+    root = tmp_path / "repo"
+    write(home / "settings.json", {"mcp": {"servers": {"echo": {"command": ["python", "a.py"]}}}})
+    write(
+        root / ".matchuco/settings.json",
+        {
+            "mcp": {
+                "servers": {
+                    "echo": {"command": ["python", "b.py"]},
+                    "other": {"command": ["python", "c.py"]},
+                }
+            }
+        },
+    )
+
+    servers = load_settings(root).mcp.servers
+    assert servers["echo"].command == ["python", "b.py"]
+    assert servers["other"].command == ["python", "c.py"]
+
+    write(tmp_path / ".matchuco/settings.json", {"mcp": {"transport": "http"}})
+    with pytest.raises(SettingsError, match=r"settings\.json"):
+        load_settings(tmp_path)
+
+
 def test_hook_settings_reject_a_shell_command(tmp_path: Path, home: Path) -> None:
     write(
         tmp_path / ".matchuco/settings.json",

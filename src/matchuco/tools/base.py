@@ -227,6 +227,12 @@ class ToolRegistry:
     def get(self, name: str) -> Tool[Any] | None:
         return self._tools.get(name)
 
+    def add(self, tool: Tool[Any]) -> None:
+        """Register a tool after construction (MCP servers attach once the process is up)."""
+        if tool.name in self._tools:
+            raise ValueError(f"duplicate tool name {tool.name!r}")
+        self._tools[tool.name] = tool
+
     async def execute(
         self, block: ToolUseBlock, ctx: ToolContext, gate: Gate | None = None
     ) -> ToolResultBlock:

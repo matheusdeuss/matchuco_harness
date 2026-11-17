@@ -23,7 +23,7 @@ hooks, skills, MCP and evals.
 | 5 | Sessions (JSONL), resume/fork, checkpoints + rewind, auto memory | ✅ |
 | 6 | Subagents | ✅ |
 | 7 | Hooks and skills | ✅ |
-| 8 | MCP client | ⏳ |
+| 8 | MCP client | ✅ |
 | 9 | Evals | ⏳ |
 
 ## Architecture
@@ -168,6 +168,25 @@ the body. The model sees only the name and the description until it calls
 `skill`. The body arrives as the `tool_result`. An unknown name is a tool
 error.
 
+### MCP
+
+The client speaks a small slice of MCP over stdio: `initialize`,
+`notifications/initialized`, `tools/list`, and `tools/call`. No resources,
+prompts, sampling, or HTTP. Each server tool is registered as
+`mcp_<server>_<tool>` and goes through the same permission gate as a command:
+ask in the default mode, deny in plan mode. A server that writes broken JSON
+comes back as an error `tool_result`, so the model can continue.
+
+Servers are launched from the same `settings.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {"echo": {"command": ["python", "server.py"]}}
+  }
+}
+```
+
 ## Quickstart
 
 Requires [uv](https://docs.astral.sh/uv/).
@@ -228,7 +247,7 @@ subagents, hooks, skills, MCP e evals.
 | 5 | Sessões (JSONL), resume/fork, checkpoints + rewind, auto memory | ✅ |
 | 6 | Subagents | ✅ |
 | 7 | Hooks e skills | ✅ |
-| 8 | Cliente MCP | ⏳ |
+| 8 | Cliente MCP | ✅ |
 | 9 | Evals | ⏳ |
 
 ### Como funciona
@@ -271,6 +290,11 @@ subagents, hooks, skills, MCP e evals.
   fixa, no mesmo arquivo que `config.py` já lê. Um skill é
   `.matchuco/skills/<nome>.md`: o modelo vê nome e descrição, e a tool `skill`
   devolve o corpo. Nome desconhecido é erro de tool.
+- **MCP**: o cliente fala só `initialize`, `tools/list` e `tools/call` por
+  stdio, em JSON-RPC. A tool entra no registry como `mcp_<servidor>_<tool>` e
+  passa pelo mesmo portão de um comando: pede confirmação no modo default e é
+  negada no plan mode. JSON quebrado volta como `tool_result` de erro. Os
+  servidores ficam em `settings.json`, na chave `mcp.servers`.
 
 ### Início rápido
 

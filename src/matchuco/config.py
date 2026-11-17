@@ -19,6 +19,9 @@ directory, which is how the tests keep away from your real one.
       "hooks": {
         "PreToolUse": [{"matcher": "shell", "deny": "no shell in this project"}],
         "PostToolUse": [{"matcher": "read", "note": "file contents may be stale"}]
+      },
+      "mcp": {
+        "servers": {"echo": {"command": ["python", "server.py"]}}
       }
     }
 """
@@ -27,10 +30,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import TypeVar
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from matchuco.permissions import Mode, PermissionPolicy, Rule
 
@@ -93,6 +97,41 @@ class HooksSettings(BaseModel):
     PostToolUse: list[PostToolHook] = []
 
 
+_MCP_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+class McpServerSettings(BaseModel):
+    """One stdio server. `command` is the argv, with no shell in between."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    command: list[str]
+
+    @field_validator("command")
+    @classmethod
+    def _command(cls, value: list[str]) -> list[str]:
+        if not value or any(not part.strip() for part in value):
+            raise ValueError("command must be a non-empty list of non-empty strings")
+        return value
+
+
+class McpSettings(BaseModel):
+    """MCP servers to launch. Tools only; there is no HTTP transport here."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    servers: dict[str, McpServerSettings] = {}
+
+    @model_validator(mode="after")
+    def _server_names(self) -> McpSettings:
+        for name in self.servers:
+            if _MCP_NAME.fullmatch(name) is None:
+                raise ValueError(
+                    f"invalid MCP server name {name!r}; use letters, digits, '_' and '-'"
+                )
+        return self
+
+
 class Settings(BaseModel):
     # Unknown top-level keys are ignored so later phases can add sections
     # without older versions refusing to start.
@@ -100,6 +139,7 @@ class Settings(BaseModel):
 
     permissions: PermissionSettings = PermissionSettings()
     hooks: HooksSettings = HooksSettings()
+    mcp: McpSettings = McpSettings()
 
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
@@ -129,8 +169,10 @@ def load_settings(root: Path) -> Settings:
 
 
 def _merge(base: Settings, layer: Settings) -> Settings:
-    """Rule lists and hook lists concatenate; `default_mode` is overridden."""
+    """Rule lists and hook lists concatenate; `default_mode` and MCP servers are overridden."""
     old, new = base.permissions, layer.permissions
+    servers = dict(base.mcp.servers)
+    servers.update(layer.mcp.servers)
     return Settings(
         permissions=PermissionSettings(
             default_mode=new.default_mode or old.default_mode,
@@ -142,6 +184,7 @@ def _merge(base: Settings, layer: Settings) -> Settings:
             PreToolUse=_dedupe_models(base.hooks.PreToolUse + layer.hooks.PreToolUse),
             PostToolUse=_dedupe_models(base.hooks.PostToolUse + layer.hooks.PostToolUse),
         ),
+        mcp=McpSettings(servers=servers),
     )
 
 
