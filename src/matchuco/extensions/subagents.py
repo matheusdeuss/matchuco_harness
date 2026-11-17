@@ -122,6 +122,7 @@ async def run_subagent(parent: Agent, prompt: str, *, description: str, readonly
         compact_threshold=parent.compact_threshold,
         session=child_log,
         depth=parent.depth + 1,
+        hooks=parent.hooks,
     )
 
     chunks: list[str] = []

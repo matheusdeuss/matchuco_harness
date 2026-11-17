@@ -22,8 +22,8 @@ hooks, skills, MCP and evals.
 | 4 | Context engineering: AGENTS.md/CLAUDE.md, environment, token tracking, compaction | ✅ |
 | 5 | Sessions (JSONL), resume/fork, checkpoints + rewind, auto memory | ✅ |
 | 6 | Subagents | ✅ |
-| 7 | Hooks and skills | ⏳ |
-| 8 | MCP client | ⏳ |
+| 7 | Hooks and skills | ✅ |
+| 8 | MCP client | ✅ |
 | 9 | Evals | ⏳ |
 
 ## Architecture
@@ -69,6 +69,7 @@ model can read it and try something else.
 | `write` | write a whole file |
 | `shell` | run a command, merged stdout/stderr + exit code |
 | `exit_plan_mode` | hand a finished plan to the user for approval |
+| `skill` | load a skill body by name; the prompt starts with only the name and description |
 
 Each tool declares a pydantic model for its input, so the JSON Schema the model
 sees and the runtime validation come from one source. `write` and `edit`
@@ -151,6 +152,41 @@ that child's final text. The child is read-only unless `readonly` is false,
 and even then its permission rules are a copy of the parent's. A child cannot
 start another child. The parent's transcript records the child's session id.
 
+### Hooks and skills
+
+`PreToolUse` runs only after the permission gate has allowed the call. A deny
+rule still wins: the hook is not consulted, and it cannot allow what the rule
+blocked. A hook denial comes back as an error `tool_result`, so the model can
+change course. `PostToolUse` may append a note to that result. The frozen
+system prompt is left as it was. Hooks are in-process callables. The same
+`settings.json` that `config.py` already loads can declare a fixed denial or
+a fixed note (`hooks.PreToolUse` / `hooks.PostToolUse`). There is no shell
+hook.
+
+A skill is `.matchuco/skills/<name>.md`: a title, a one-line description, then
+the body. The model sees only the name and the description until it calls
+`skill`. The body arrives as the `tool_result`. An unknown name is a tool
+error.
+
+### MCP
+
+The client speaks a small slice of MCP over stdio: `initialize`,
+`notifications/initialized`, `tools/list`, and `tools/call`. No resources,
+prompts, sampling, or HTTP. Each server tool is registered as
+`mcp_<server>_<tool>` and goes through the same permission gate as a command:
+ask in the default mode, deny in plan mode. A server that writes broken JSON
+comes back as an error `tool_result`, so the model can continue.
+
+Servers are launched from the same `settings.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {"echo": {"command": ["python", "server.py"]}}
+  }
+}
+```
+
 ## Quickstart
 
 Requires [uv](https://docs.astral.sh/uv/).
@@ -210,8 +246,8 @@ subagents, hooks, skills, MCP e evals.
 | 4 | Context engineering: AGENTS.md/CLAUDE.md, ambiente, contagem de tokens, compactação | ✅ |
 | 5 | Sessões (JSONL), resume/fork, checkpoints + rewind, auto memory | ✅ |
 | 6 | Subagents | ✅ |
-| 7 | Hooks e skills | ⏳ |
-| 8 | Cliente MCP | ⏳ |
+| 7 | Hooks e skills | ✅ |
+| 8 | Cliente MCP | ✅ |
 | 9 | Evals | ⏳ |
 
 ### Como funciona
@@ -246,6 +282,19 @@ subagents, hooks, skills, MCP e evals.
   devolve só o texto final. O filho é somente leitura por padrão, não herda
   permissão maior que a do pai e não pode abrir outro filho. O JSONL do pai
   guarda o id da sessão do filho.
+- **Hooks e skills**: `PreToolUse` só roda depois que a permissão autorizou.
+  Uma regra `deny` não consulta o hook, e o hook não consegue liberar o que
+  ela barrou. A negação volta como `tool_result` de erro. `PostToolUse` pode
+  acrescentar uma nota ao resultado, sem reescrever o system prompt. O hook
+  de teste é uma função no processo; `settings.json` declara negação ou nota
+  fixa, no mesmo arquivo que `config.py` já lê. Um skill é
+  `.matchuco/skills/<nome>.md`: o modelo vê nome e descrição, e a tool `skill`
+  devolve o corpo. Nome desconhecido é erro de tool.
+- **MCP**: o cliente fala só `initialize`, `tools/list` e `tools/call` por
+  stdio, em JSON-RPC. A tool entra no registry como `mcp_<servidor>_<tool>` e
+  passa pelo mesmo portão de um comando: pede confirmação no modo default e é
+  negada no plan mode. JSON quebrado volta como `tool_result` de erro. Os
+  servidores ficam em `settings.json`, na chave `mcp.servers`.
 
 ### Início rápido
 

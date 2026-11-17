@@ -14,6 +14,10 @@ Between validating the arguments and running the tool sits an optional
 *gate*: the hook the permission system (`permissions.py`) plugs into. The
 registry does not know what a permission is -- it only knows that a gate can
 say "no, and here is why", which becomes one more error result.
+
+After the gate allows a call, optional tool hooks (`extensions/hooks.py`) may
+still refuse it or annotate the result. A denial from either place is an error
+result. A hook is not consulted when the gate already refused.
 """
 
 from __future__ import annotations
@@ -41,6 +45,21 @@ ToolKind = Literal["read", "edit", "execute", "plan"]
 
 # Called with a validated call; returns None to let it run, or a denial message.
 Gate = Callable[["Tool[Any]", BaseModel], Awaitable[str | None]]
+
+
+class ToolHooks(Protocol):
+    """What the registry asks of a hook runner. Implementations live in `extensions/`.
+
+    `pre_tool_use` runs only after the permission gate has allowed the call.
+    It returns a denial message, or None to run the tool. `post_tool_use` sees
+    the result and returns a note to append, or None.
+    """
+
+    async def pre_tool_use(self, tool: Tool[Any], args: BaseModel) -> str | None: ...
+
+    async def post_tool_use(
+        self, tool: Tool[Any], args: BaseModel, result: ToolResultBlock
+    ) -> str | None: ...
 
 
 class SubagentSpawner(Protocol):
@@ -78,6 +97,8 @@ class ToolContext:
     # Set by the `task` tool for the call that is in flight. The loop copies it
     # onto that tool_result and clears it before the next call.
     last_child_session_id: str | None = None
+    # PreToolUse / PostToolUse. None means no hooks are installed.
+    hooks: ToolHooks | None = None
 
     def __post_init__(self) -> None:
         self.root = self.root.resolve()
@@ -206,10 +227,18 @@ class ToolRegistry:
     def get(self, name: str) -> Tool[Any] | None:
         return self._tools.get(name)
 
+    def add(self, tool: Tool[Any]) -> None:
+        """Register a tool after construction (MCP servers attach once the process is up)."""
+        if tool.name in self._tools:
+            raise ValueError(f"duplicate tool name {tool.name!r}")
+        self._tools[tool.name] = tool
+
     async def execute(
         self, block: ToolUseBlock, ctx: ToolContext, gate: Gate | None = None
     ) -> ToolResultBlock:
-        """Run one tool call: validate -> gate -> run. Never raises for tool-level failures.
+        """Run one tool call: validate -> gate -> PreToolUse -> run -> PostToolUse.
+
+        Never raises for tool-level failures.
 
         Validation comes before the gate on purpose: the user should only ever be
         asked to approve a call that could actually run, with its real arguments.
@@ -223,18 +252,55 @@ class ToolRegistry:
             )
         try:
             args = tool.parse(block.input)
-            if gate is not None and (denial := await gate(tool, args)) is not None:
-                return ToolResultBlock(tool_use_id=block.id, content=denial, is_error=True)
-            content = await tool.run(args, ctx)
         except ToolError as e:
             return ToolResultBlock(tool_use_id=block.id, content=str(e), is_error=True)
+
+        # Permission first. A deny (or a "no" from the user) never reaches a hook,
+        # so a hook cannot allow what the gate blocked.
+        if gate is not None and (denial := await gate(tool, args)) is not None:
+            return ToolResultBlock(tool_use_id=block.id, content=denial, is_error=True)
+        if (denial := await _pre_tool_use(ctx, tool, args)) is not None:
+            return ToolResultBlock(tool_use_id=block.id, content=denial, is_error=True)
+
+        try:
+            content = await tool.run(args, ctx)
+        except ToolError as e:
+            result = ToolResultBlock(tool_use_id=block.id, content=str(e), is_error=True)
         except Exception as e:  # a tool bug must not kill the session
-            return ToolResultBlock(
+            result = ToolResultBlock(
                 tool_use_id=block.id,
                 content=f"{block.name} raised {type(e).__name__}: {e}",
                 is_error=True,
             )
-        return ToolResultBlock(tool_use_id=block.id, content=content)
+        else:
+            result = ToolResultBlock(tool_use_id=block.id, content=content)
+        return await _post_tool_use(ctx, tool, args, result)
+
+
+async def _pre_tool_use(ctx: ToolContext, tool: Tool[Any], args: BaseModel) -> str | None:
+    """Ask PreToolUse. A hook that raises denies the call; it does not escape."""
+    if ctx.hooks is None:
+        return None
+    try:
+        return await ctx.hooks.pre_tool_use(tool, args)
+    except Exception as e:
+        return f"Hook denied: PreToolUse hook failed ({type(e).__name__}: {e})."
+
+
+async def _post_tool_use(
+    ctx: ToolContext, tool: Tool[Any], args: BaseModel, result: ToolResultBlock
+) -> ToolResultBlock:
+    """Append a PostToolUse note. The tool result is otherwise left as the tool wrote it."""
+    if ctx.hooks is None:
+        return result
+    try:
+        note = await ctx.hooks.post_tool_use(tool, args, result)
+    except Exception as e:
+        note = f"PostToolUse hook failed ({type(e).__name__}: {e})."
+    if not note:
+        return result
+    content = f"{result.content}\n\n{note}" if result.content else note
+    return result.model_copy(update={"content": content})
 
 
 def truncate(text: str, limit: int, unit: str = "characters") -> str:

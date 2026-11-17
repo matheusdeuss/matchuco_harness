@@ -37,6 +37,7 @@ def test_specs_expose_a_json_schema() -> None:
         "shell",
         "exit_plan_mode",
         "remember",
+        "skill",
         "task",
     }
     assert "path" in specs["read"].input_schema["properties"]

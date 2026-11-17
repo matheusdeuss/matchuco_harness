@@ -38,6 +38,8 @@ from matchuco.context import (
     estimate_tokens,
     estimate_tools,
 )
+from matchuco.extensions.hooks import HookRegistry
+from matchuco.extensions.skills import SkillTool
 from matchuco.messages import (
     ContentBlock,
     Message,
@@ -275,6 +277,7 @@ class Agent:
         compact_threshold: float = DEFAULT_COMPACT_THRESHOLD,
         session: SessionLog | None = None,
         depth: int = 0,
+        hooks: HookRegistry | None = None,
     ) -> None:
         self.provider = provider
         self.registry = ToolRegistry(list(default_tools() if tools is None else tools))
@@ -282,6 +285,10 @@ class Agent:
         self.depth = depth
         self.context.depth = depth
         self.context.spawn = self._spawn_subagent
+        # Shared with subagents: a project hook applies to the child too.
+        self.hooks = hooks or HookRegistry()
+        self.context.hooks = self.hooks
+        self._bind_skills()
         # system=None: the full prompt with environment and AGENTS.md files,
         # rebuilt on /clear. An explicit string is used as-is (tests, embedding).
         self._custom_system = system
@@ -316,6 +323,12 @@ class Agent:
             self.context.on_edit = self._checkpoint_before_edit
 
     # --- system prompt ---------------------------------------------------------
+
+    def _bind_skills(self) -> None:
+        """Point the skill tool at this workspace. The body stays out of the spec."""
+        tool = self.registry.get("skill")
+        if isinstance(tool, SkillTool):
+            tool.bind(self.context.root)
 
     def _build_system_prompt(self) -> SystemPrompt:
         root = self.context.root
@@ -357,6 +370,7 @@ class Agent:
         self._pending.clear()
         self._batch_checkpoints.clear()
         self.system_prompt = self._build_system_prompt()
+        self._bind_skills()
         if self.session is not None:
             self.session = SessionLog.create(self.context.root)
 

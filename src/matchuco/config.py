@@ -15,6 +15,13 @@ directory, which is how the tests keep away from your real one.
         "allow": ["shell(uv run pytest *)", "shell(git status)"],
         "ask":   ["shell(git push *)"],
         "deny":  ["read(.env)", "shell(rm -rf *)"]
+      },
+      "hooks": {
+        "PreToolUse": [{"matcher": "shell", "deny": "no shell in this project"}],
+        "PostToolUse": [{"matcher": "read", "note": "file contents may be stale"}]
+      },
+      "mcp": {
+        "servers": {"echo": {"command": ["python", "server.py"]}}
       }
     }
 """
@@ -23,9 +30,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
+from typing import TypeVar
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from matchuco.permissions import Mode, PermissionPolicy, Rule
 
@@ -45,12 +54,95 @@ class PermissionSettings(BaseModel):
     deny: list[str] = []
 
 
+class PreToolHook(BaseModel):
+    """A PreToolUse hook declared in settings: matching calls are denied."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    matcher: str = "*"
+    deny: str
+
+    @field_validator("matcher", "deny")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("must not be empty")
+        return text
+
+
+class PostToolHook(BaseModel):
+    """A PostToolUse hook declared in settings: matching results gain a note."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    matcher: str = "*"
+    note: str
+
+    @field_validator("matcher", "note")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("must not be empty")
+        return text
+
+
+class HooksSettings(BaseModel):
+    """In-process hooks. A command string is not a hook; register a callable for that."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    PreToolUse: list[PreToolHook] = []
+    PostToolUse: list[PostToolHook] = []
+
+
+_MCP_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+class McpServerSettings(BaseModel):
+    """One stdio server. `command` is the argv, with no shell in between."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    command: list[str]
+
+    @field_validator("command")
+    @classmethod
+    def _command(cls, value: list[str]) -> list[str]:
+        if not value or any(not part.strip() for part in value):
+            raise ValueError("command must be a non-empty list of non-empty strings")
+        return value
+
+
+class McpSettings(BaseModel):
+    """MCP servers to launch. Tools only; there is no HTTP transport here."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    servers: dict[str, McpServerSettings] = {}
+
+    @model_validator(mode="after")
+    def _server_names(self) -> McpSettings:
+        for name in self.servers:
+            if _MCP_NAME.fullmatch(name) is None:
+                raise ValueError(
+                    f"invalid MCP server name {name!r}; use letters, digits, '_' and '-'"
+                )
+        return self
+
+
 class Settings(BaseModel):
     # Unknown top-level keys are ignored so later phases can add sections
     # without older versions refusing to start.
     model_config = ConfigDict(extra="ignore")
 
     permissions: PermissionSettings = PermissionSettings()
+    hooks: HooksSettings = HooksSettings()
+    mcp: McpSettings = McpSettings()
+
+
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
 def user_dir() -> Path:
@@ -72,15 +164,28 @@ def load_settings(root: Path) -> Settings:
     for path in settings_files(root):
         if not path.is_file():
             continue
-        layer = _read(path)
-        perms, new = merged.permissions, layer.permissions
-        merged.permissions = PermissionSettings(
-            default_mode=new.default_mode or perms.default_mode,
-            allow=_dedupe(perms.allow + new.allow),
-            ask=_dedupe(perms.ask + new.ask),
-            deny=_dedupe(perms.deny + new.deny),
-        )
+        merged = _merge(merged, _read(path))
     return merged
+
+
+def _merge(base: Settings, layer: Settings) -> Settings:
+    """Rule lists and hook lists concatenate; `default_mode` and MCP servers are overridden."""
+    old, new = base.permissions, layer.permissions
+    servers = dict(base.mcp.servers)
+    servers.update(layer.mcp.servers)
+    return Settings(
+        permissions=PermissionSettings(
+            default_mode=new.default_mode or old.default_mode,
+            allow=_dedupe(old.allow + new.allow),
+            ask=_dedupe(old.ask + new.ask),
+            deny=_dedupe(old.deny + new.deny),
+        ),
+        hooks=HooksSettings(
+            PreToolUse=_dedupe_models(base.hooks.PreToolUse + layer.hooks.PreToolUse),
+            PostToolUse=_dedupe_models(base.hooks.PostToolUse + layer.hooks.PostToolUse),
+        ),
+        mcp=McpSettings(servers=servers),
+    )
 
 
 def _read(path: Path) -> Settings:
@@ -97,6 +202,18 @@ def _read(path: Path) -> Settings:
 
 def _dedupe(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
+
+
+def _dedupe_models(items: list[_ModelT]) -> list[_ModelT]:
+    seen: set[str] = set()
+    unique: list[_ModelT] = []
+    for item in items:
+        key = item.model_dump_json()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
 
 
 def build_policy(settings: Settings, mode: Mode | None = None) -> PermissionPolicy:
